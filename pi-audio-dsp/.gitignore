@@ -1,0 +1,23 @@
+# Build artifacts
+build/
+*.o
+*.a
+*.so
+*.bin
+
+# IDE
+.vscode/
+.idea/
+.kilo/
+kilo-settings.json
+.kilo/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Config files (should not be committed)
+/etc/pi-audio/

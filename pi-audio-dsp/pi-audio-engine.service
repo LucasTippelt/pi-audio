@@ -1,0 +1,13 @@
+[Unit]
+Description=Pi Audio DSP Engine
+After=sound.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/pi-audio-engine /etc/pi-audio/config/current.json /var/log/pi-audio/engine.log
+Restart=on-failure
+User=pi
+Group=audio
+
+[Install]
+WantedBy=multi-user.target

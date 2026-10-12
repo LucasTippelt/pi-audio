@@ -1,0 +1,7 @@
+# Monorepo root - git ignore
+pi-audio-dsp/build/
+pi-audio-dsp/*.log
+pi-audio-web/assets/*.map
+*.swp
+*.swo
+*~
