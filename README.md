@@ -7,8 +7,8 @@ Single repository for the Pi Audio DSP engine and web interface.
 ### Clone
 
 ```bash
-git clone https://github.com/LucasTippelt/pi-audio.git
-cd pi-audio
+git clone https://github.com/LucasTippelt/pi-audio.git /var/www/pi-audio
+cd /var/www/pi-audio
 ```
 
 ### VS Code SSH
@@ -32,21 +32,21 @@ Two branches are used:
 | Branch | Purpose |
 |---|---|
 | `master` | Stable, production-ready code |
-| `testing` | Experimental features, pre-production testing |
+| `staging` | Experimental features, pre-production testing |
 
 ```bash
 # Switch branches
 git fetch origin
-git checkout testing
+git checkout staging
 git checkout master
 
 # Pull / push
 git pull origin <branch>
 git push origin <branch>
 
-# Merge testing into master (when ready)
+# Merge staging into master (when ready)
 git checkout master
-git merge testing
+git merge staging
 git push origin master
 ```
 
