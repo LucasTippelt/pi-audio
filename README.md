@@ -6,12 +6,14 @@ Single repository for the Pi Audio DSP engine and web interface.
 
 ```
 /var/www/pi-audio/
-├── pi-audio-dsp/       # DSP engine (C++, CMake, ALSA)
+├── pi-audio-dsp/               # DSP engine (C++, CMake, ALSA)
 │   ├── src/
-│   ├── CMakeLists.txt
-│   ├── deploy.sh
+│   ├── overrides/              # VM systemd overrides
+│   ├── deploy.sh               # Production deploy
+│   ├── deploy-vm.sh            # VM deploy
+│   ├── redeploy.sh             # Quick redeploy
 │   └── pi-audio-engine.service
-├── pi-audio-web/       # Web interface (PHP, Apache)
+├── pi-audio-web/               # Web interface (PHP, Apache)
 │   ├── api.php
 │   ├── index.php
 │   ├── debug.php
@@ -21,17 +23,36 @@ Single repository for the Pi Audio DSP engine and web interface.
 
 ## Deploy
 
+### Production (Raspberry Pi)
+
 ```bash
 cd /var/www/pi-audio/pi-audio-dsp
 sudo ./deploy.sh
 ```
 
-This builds the DSP engine, installs binaries, configures Apache, and sets up the systemd service.
+Builds the DSP engine, installs binaries, configures Apache, and sets up the systemd service.
+
+### VM / Development
+
+```bash
+cd /var/www/pi-audio/pi-audio-dsp
+sudo bash deploy-vm.sh
+```
+
+Uses the current user instead of `pi:audio`, installs the VM systemd override, and configures shared runtime directories.
 
 ## Services
 
 - **pi-audio-engine** — Main audio engine (systemd service)
 - **Apache** — Web interface on port 80
+
+## Engine Communication
+
+The engine and web UI communicate through files in `/run/pi-audio/`:
+
+- **`status`** — Engine running flag
+- **`engine-state.json`** — Current engine parameters (written every second)
+- **`reload`** — Reload trigger (written by apply adapter, consumed by engine)
 
 ## Config
 

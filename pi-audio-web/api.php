@@ -125,7 +125,7 @@ function writeJson(string $path, array $data): void {
         @unlink($temporary);
         throw new RuntimeException('Could not write ' . $path . '.');
     }
-    @chmod($path, 0660);
+    @chmod($path, 0664);
     $written = @file_get_contents($path);
     if ($written === false || !hash_equals($json, $written)) {
         throw new RuntimeException('Could not verify that ' . $path . ' was written.');

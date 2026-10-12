@@ -567,6 +567,7 @@ async function refreshDspStatus() {
   const statusRequest = (async () => {
     try {
       const data = await request('dsp-status');
+      console.log('[pi-audio] DSP status response:', data);
       const sampleRate = data.sampleRate ? ` · ${(data.sampleRate / 1000).toFixed(data.sampleRate % 1000 ? 1 : 0)} kHz` : '';
       status.lastElementChild.textContent = `DSP connection: ${data.connected ? 'Connected' : 'Unavailable'}${sampleRate}`;
       status.title = data.message || '';
@@ -591,6 +592,8 @@ async function refreshDspStatus() {
       status.title = error.message;
       status.classList.add('is-error');
       status.classList.remove('is-connected');
+      console.error("[pi-audio] DSP status error:", error);
+      console.error("[pi-audio] DSP status error:", error);
       const message = ui.audioApplyError || `DSP status unavailable: ${error.message}`;
       setAudioParameterError('#sample-rate', message);
       setAudioParameterError('#buffer-size', message);

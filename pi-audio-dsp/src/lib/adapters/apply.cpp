@@ -4,23 +4,20 @@
 #include <iostream>
 #include <fstream>
 #include <string>
+#include <cstdio>
 
 int applyAdapter(const std::string& configFile) {
     Logger::getInstance().info("Apply adapter invoked");
-    
+
     // Read configuration from file
     auto configManager = ConfigManager::instance();
     if (!configManager->loadFromFile(configFile)) {
         std::cerr << "Failed to load configuration from " << configFile << std::endl;
         return 1;
     }
-    
-    // Apply configuration to engine
-    // In a real implementation, this would communicate with the running engine
-    // For now, we just validate the config
-    
+
     auto config = configManager->getConfig();
-    
+
     // Validate sample rate
     if (config.sampleRate != 44100 && config.sampleRate != 48000 &&
         config.sampleRate != 88200 && config.sampleRate != 96000 &&
@@ -28,7 +25,7 @@ int applyAdapter(const std::string& configFile) {
         std::cerr << "Invalid sample rate: " << config.sampleRate << std::endl;
         return 1;
     }
-    
+
     // Validate buffer size
     if (config.bufferSize != 64 && config.bufferSize != 128 &&
         config.bufferSize != 256 && config.bufferSize != 512 &&
@@ -37,10 +34,19 @@ int applyAdapter(const std::string& configFile) {
         std::cerr << "Invalid buffer size: " << config.bufferSize << std::endl;
         return 1;
     }
-    
-    // Apply to engine (placeholder)
+
+    // Signal engine to reload config by writing trigger file
+    FILE* f = fopen("/run/pi-audio/reload", "w");
+    if (f) {
+        fprintf(f, "%s", configFile.c_str());
+        fclose(f);
+        Logger::getInstance().info("Reload trigger written");
+    } else {
+        Logger::getInstance().warning("Failed to write reload trigger");
+    }
+
     Logger::getInstance().info("Configuration applied successfully");
     std::cout << "{\"ok\":true}" << std::endl;
-    
+
     return 0;
 }

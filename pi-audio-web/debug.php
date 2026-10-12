@@ -27,6 +27,8 @@ session_start();
     .badge-ok { background: #003322; color: #00ff88; }
     .badge-err { background: #330011; color: #ff4444; }
     .badge-warn { background: #332200; color: #ffaa00; }
+    #refresh-bar { position: fixed; top: 0; left: 0; height: 2px; background: #00ff88; transition: width linear; }
+    #refresh-status { position: fixed; top: 0.5rem; right: 1rem; font-size: 0.75rem; color: #555; }
   </style>
 </head>
 <body>
@@ -34,8 +36,8 @@ session_start();
   <p><a href="./">← Back to main page</a></p>
 
   <?php
-  function row(string $label, string $value, string $cls = ''): void {
-      echo "<tr><th>$label</th><td class=\"$cls\">$value</td></tr>\n";
+  function row(string $label, mixed $value, string $cls = ''): void {
+      echo "<tr><th>$label</th><td class=\"$cls\">" . htmlspecialchars((string)$value) . "</td></tr>\n";
   }
   function badge(string $label, bool $ok): void {
       echo "<span class=\"badge " . ($ok ? 'badge-ok' : 'badge-err') . "\">$label</span>";
@@ -60,7 +62,7 @@ session_start();
   foreach ($envVars as $v) {
       $val = getenv($v);
       $cls = $val ? 'ok' : 'warn';
-      row($v, $val ?? '<em>not set</em>', $cls);
+      row($v, $val !== false && $val !== '' ? $val : '(not set)', $cls);
   }
   echo "</table>\n";
 
@@ -192,6 +194,43 @@ session_start();
       echo "<p class='warn'>Status adapter not available</p>\n";
   }
 
+  // ---- ENGINE STATE vs CONFIG ----
+  sectionHeading('Engine State vs Config (Apply Verification)');
+  $statePath = '/run/pi-audio/engine-state.json';
+  if (is_file($statePath)) {
+      $engineState = json_decode(file_get_contents($statePath), true);
+      if (is_array($engineState) && is_array($config ?? null)) {
+          $fields = [
+              'input' => 'Input Device',
+              'output' => 'Output Device',
+              'sampleRate' => 'Sample Rate',
+              'BufferSize' => 'Buffer Size',
+              'volume' => 'Volume',
+              'muted' => 'Muted',
+          ];
+          echo "<table>\n";
+          echo "<tr><th>Parameter</th><th>Config File</th><th>Engine State</th><th>Match</th></tr>\n";
+          foreach ($fields as $key => $label) {
+              $cfgVal = $config[$key] ?? '—';
+              $engVal = $engineState[$key] ?? '—';
+              $cfgStr = is_bool($cfgVal) ? ($cfgVal ? 'true' : 'false') : (is_array($cfgVal) ? 'array' : (string)$cfgVal);
+              $engStr = is_bool($engVal) ? ($engVal ? 'true' : 'false') : (is_array($engVal) ? 'array' : (string)$engVal);
+              $match = ($cfgStr === $engStr);
+              $matchCls = $match ? 'ok' : 'err';
+              $matchIcon = $match ? '✓' : '✗';
+              echo "<tr>";
+              echo "<th>$label</th>";
+              echo "<td>$cfgStr</td>";
+              echo "<td>$engStr</td>";
+              echo "<td class=\"$matchCls\">$matchIcon</td>";
+              echo "</tr>\n";
+          }
+          echo "</table>\n";
+      }
+  } else {
+      echo "<p class='warn'>Engine state file not found at $statePath — engine may not be writing state, or engine-state.json was not created after the latest build.</p>\n";
+  }
+
   // ---- SERVICE STATUS ----
   sectionHeading('Systemd Service');
   $svcStatus = shell_exec('systemctl is-active pi-audio-engine 2>&1');
@@ -264,5 +303,28 @@ session_start();
       echo "<p class='err'>File not found</p>\n";
   }
   ?>
+  <div id="refresh-bar"></div>
+  <div id="refresh-status">Auto-refresh: 5s</div>
+  <script>
+    (function() {
+      const interval = 5000;
+      let start = Date.now();
+      const bar = document.getElementById('refresh-bar');
+      const status = document.getElementById('refresh-status');
+      function tick() {
+        const elapsed = Date.now() - start;
+        const pct = Math.min(100, (elapsed / interval) * 100);
+        bar.style.width = pct + '%';
+        const remaining = Math.max(0, Math.ceil((interval - elapsed) / 1000));
+        status.textContent = 'Refresh in ' + remaining + 's';
+        if (elapsed >= interval) {
+          location.reload();
+        } else {
+          requestAnimationFrame(tick);
+        }
+      }
+      requestAnimationFrame(tick);
+    })();
+  </script>
 </body>
 </html>
