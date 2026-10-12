@@ -1,6 +1,7 @@
 #!/bin/bash
 # VM deployment script for Pi Audio DSP Engine
 # Adapted for VM environment — uses current user instead of pi:audio
+# Run from: /var/www/pi-audio/pi-audio-dsp/
 
 set -e
 
@@ -13,7 +14,7 @@ echo "Deploying from $REPO_DIR (VM mode)"
 # Verify binaries exist in temp build dir
 if [ ! -f "$BUILD_DIR/pi-audio-engine" ]; then
     echo "ERROR: Pre-built binaries not found in $BUILD_DIR"
-    echo "Run the build first: cd /tmp/pi-audio-build && cmake $DSP_DIR && make -j\$(nproc)"
+    echo "Run: cd $BUILD_DIR && cmake $DSP_DIR && make -j\$(nproc)"
     exit 1
 fi
 
@@ -29,8 +30,6 @@ sudo cp "$BUILD_DIR/pi-audio-apply" /usr/local/bin/
 sudo cp "$BUILD_DIR/pi-audio-status" /usr/local/bin/
 sudo cp "$BUILD_DIR/pi-audio-measure" /usr/local/bin/
 sudo cp "$BUILD_DIR/pi-audio-test" /usr/local/bin/
-
-# Set permissions
 sudo chmod 755 /usr/local/bin/pi-audio-*
 
 # Install systemd service
@@ -43,10 +42,14 @@ sudo cp "$DSP_DIR/overrides/10-vm-user.conf" /etc/systemd/system/pi-audio-engine
 sudo systemctl daemon-reload
 sudo systemctl enable pi-audio-engine
 
-# Set ownership to current user instead of pi:audio
+# Set ownership to current user for config and runtime directories
 CURRENT_USER=$(whoami)
 sudo chown -R "$CURRENT_USER":"$CURRENT_USER" /etc/pi-audio/
 sudo chmod -R 775 /etc/pi-audio/
+sudo chown -R "$CURRENT_USER":audio /run/pi-audio
+sudo chmod 775 /run/pi-audio
+sudo chown -R "$CURRENT_USER":audio /var/log/pi-audio
+sudo chmod 775 /var/log/pi-audio
 
 # Create default configuration if it doesn't exist
 if [ ! -f /etc/pi-audio/config/current.json ]; then
@@ -85,6 +88,7 @@ if [ ! -f /etc/pi-audio/config/current.json ]; then
 EOF
     sudo cp /tmp/current.json /etc/pi-audio/config/current.json
     sudo chown "$CURRENT_USER":"$CURRENT_USER" /etc/pi-audio/config/current.json
+    sudo chmod 664 /etc/pi-audio/config/current.json
     rm /tmp/current.json
 fi
 
@@ -110,4 +114,3 @@ sudo systemctl restart apache2
 
 echo "VM Deployment complete!"
 echo "Start the engine with: sudo systemctl start pi-audio-engine"
-echo "Check status with: sudo systemctl status pi-audio-engine"
