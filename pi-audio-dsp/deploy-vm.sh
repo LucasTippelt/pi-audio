@@ -7,7 +7,7 @@ set -e
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DSP_DIR="$REPO_DIR/pi-audio-dsp"
-BUILD_DIR="/tmp/pi-audio-build"
+BUILD_DIR="$DSP_DIR/build"
 
 echo "Deploying from $REPO_DIR (VM mode)"
 

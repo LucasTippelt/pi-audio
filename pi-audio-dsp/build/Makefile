@@ -175,6 +175,19 @@ audio_core/fast:
 .PHONY : audio_core/fast
 
 #=============================================================================
+# Target rules for targets named gen_version
+
+# Build rule for target.
+gen_version: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 gen_version
+.PHONY : gen_version
+
+# fast build rule for target.
+gen_version/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/gen_version.dir/build.make CMakeFiles/gen_version.dir/build
+.PHONY : gen_version/fast
+
+#=============================================================================
 # Target rules for targets named pi-audio-engine
 
 # Build rule for target.
@@ -551,6 +564,30 @@ src/lib/core/monitor.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/audio_core.dir/build.make CMakeFiles/audio_core.dir/src/lib/core/monitor.cpp.s
 .PHONY : src/lib/core/monitor.cpp.s
 
+src/lib/core/tcp_relay.o: src/lib/core/tcp_relay.cpp.o
+.PHONY : src/lib/core/tcp_relay.o
+
+# target to build an object file
+src/lib/core/tcp_relay.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/audio_core.dir/build.make CMakeFiles/audio_core.dir/src/lib/core/tcp_relay.cpp.o
+.PHONY : src/lib/core/tcp_relay.cpp.o
+
+src/lib/core/tcp_relay.i: src/lib/core/tcp_relay.cpp.i
+.PHONY : src/lib/core/tcp_relay.i
+
+# target to preprocess a source file
+src/lib/core/tcp_relay.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/audio_core.dir/build.make CMakeFiles/audio_core.dir/src/lib/core/tcp_relay.cpp.i
+.PHONY : src/lib/core/tcp_relay.cpp.i
+
+src/lib/core/tcp_relay.s: src/lib/core/tcp_relay.cpp.s
+.PHONY : src/lib/core/tcp_relay.s
+
+# target to generate assembly for a file
+src/lib/core/tcp_relay.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/audio_core.dir/build.make CMakeFiles/audio_core.dir/src/lib/core/tcp_relay.cpp.s
+.PHONY : src/lib/core/tcp_relay.cpp.s
+
 # Help Target
 help:
 	@echo "The following are some of the valid targets for this Makefile:"
@@ -563,6 +600,7 @@ help:
 	@echo "... install/strip"
 	@echo "... list_install_components"
 	@echo "... rebuild_cache"
+	@echo "... gen_version"
 	@echo "... audio_core"
 	@echo "... pi-audio-apply"
 	@echo "... pi-audio-engine"
@@ -608,6 +646,9 @@ help:
 	@echo "... src/lib/core/monitor.o"
 	@echo "... src/lib/core/monitor.i"
 	@echo "... src/lib/core/monitor.s"
+	@echo "... src/lib/core/tcp_relay.o"
+	@echo "... src/lib/core/tcp_relay.i"
+	@echo "... src/lib/core/tcp_relay.s"
 .PHONY : help
 
 

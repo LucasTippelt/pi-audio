@@ -15,6 +15,8 @@ file(REMOVE_RECURSE
   "CMakeFiles/audio_core.dir/src/lib/core/logger.cpp.o.d"
   "CMakeFiles/audio_core.dir/src/lib/core/monitor.cpp.o"
   "CMakeFiles/audio_core.dir/src/lib/core/monitor.cpp.o.d"
+  "CMakeFiles/audio_core.dir/src/lib/core/tcp_relay.cpp.o"
+  "CMakeFiles/audio_core.dir/src/lib/core/tcp_relay.cpp.o.d"
   "libaudio_core.a"
   "libaudio_core.pdb"
 )

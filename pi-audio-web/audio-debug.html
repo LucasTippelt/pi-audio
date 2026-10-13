@@ -29,7 +29,8 @@
       font-size: 0.75rem; color: #aaa; display: flex; align-items: center; gap: 0.3rem;
       background: #333; padding: 0.3rem 0.6rem; border-radius: 3px; cursor: pointer;
     }
-    .ch-select input[type="checkbox"] { accent-color: #8a9b4a; }
+    .ch-select input[type="radio"] { accent-color: #8a9b4a; }
+    .ch-select label.active-ch { background: #4a5a2a; color: #c0d080; }
     .ch-select label.disabled-ch { opacity: 0.4; }
     .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.5rem; }
     .metric { background: #333; padding: 0.6rem; border-radius: 4px; }
@@ -53,13 +54,16 @@
 
     <div class="ch-select">
       <span style="font-size:0.75rem;color:#888;">MONITOR:</span>
-      <label><input type="checkbox" data-ch="pgm-l"> PGM L</label>
-      <label><input type="checkbox" data-ch="pgm-r"> PGM R</label>
-      <label><input type="checkbox" checked data-ch="woofer-l"> Woofer L</label>
-      <label><input type="checkbox" checked data-ch="tweeter-l"> Tweeter L</label>
-      <label><input type="checkbox" data-ch="woofer-r"> Woofer R</label>
-      <label><input type="checkbox" data-ch="tweeter-r"> Tweeter R</label>
-      <label><input type="checkbox" data-ch="mic"> Mic Input</label>
+      <label><input type="radio" name="monitor-ch" value="pgm-l"> PGM L</label>
+      <label><input type="radio" name="monitor-ch" value="pgm-r"> PGM R</label>
+      <label><input type="radio" name="monitor-ch" value="woofer-l" checked> Woofer L</label>
+      <label><input type="radio" name="monitor-ch" value="tweeter-l"> Tweeter L</label>
+      <label><input type="radio" name="monitor-ch" value="woofer-r"> Woofer R</label>
+      <label><input type="radio" name="monitor-ch" value="tweeter-r"> Tweeter R</label>
+      <label><input type="radio" name="monitor-ch" value="mic-1"> Mic Input 1</label>
+      <label><input type="radio" name="monitor-ch" value="mic-2"> Mic Input 2</label>
+      <label><input type="radio" name="monitor-ch" value="mic-3"> Mic Input 3</label>
+      <label><input type="radio" name="monitor-ch" value="mic-4"> Mic Input 4</label>
     </div>
 
     <div class="metrics">
@@ -90,8 +94,8 @@
     </div>
     <canvas id="waveform"></canvas>
     <div class="info">
-      Streams per-channel ring buffers (<code>/run/pi-audio/monitor-{channel}.raw</code>) and plays them through
-      the Web Audio API. Select channels above, then trigger a speaker test from the main UI to hear whitenoise.
+      Streams per-channel monitor data (<code>/run/pi-audio/monitor-{channel}.raw</code>) and plays it through
+      the Web Audio API. Select a single channel above, then trigger a speaker test from the main UI to hear whitenoise.
       Each channel has its own 4 MB mono ring buffer.
     </div>
   </div>
@@ -123,12 +127,9 @@
     const WS_PORT = 8765;
     const WS_PROTO = location.protocol === 'https:' ? 'wss' : 'ws';
 
-    function getActiveChannels() {
-      const ch = {};
-      document.querySelectorAll('[data-ch]').forEach(el => {
-        ch[el.dataset.ch] = el.checked && !el.disabled;
-      });
-      return ch;
+    function getSelectedChannel() {
+      const sel = document.querySelector('input[name="monitor-ch"]:checked');
+      return sel ? sel.value : null;
     }
 
     function setStatus(text, state) {
@@ -310,8 +311,7 @@
       }
       if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
 
-      const active = getActiveChannels();
-      const ch = Object.keys(active).find(k => active[k]);
+      const ch = getSelectedChannel();
       if (!ch) {
         setStatus('No channel selected', 'error');
         return;
@@ -385,20 +385,28 @@
 
     window.addEventListener('unload', stopStream);
 
-    /* Restart stream when channel checkboxes change */
-    document.querySelectorAll('[data-ch]').forEach(el => {
+    /* Restart stream when channel radio button changes */
+    document.querySelectorAll('input[name="monitor-ch"]').forEach(el => {
       el.addEventListener('change', () => {
+        updateChannelHighlights();
         if (!running) return;
         setStatus('Channel changed, reconnecting...', 'active');
         if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
         if (ws) { try { ws.close(); } catch(e) {} ws = null; }
-      scheduledEnd = audioCtx.currentTime + 0.2;
+        scheduledEnd = audioCtx.currentTime + 0.2;
         chunkCount = 0;
         dropCount = 0;
         waveData.fill(0);
         connectWebSocket();
       });
     });
+
+    function updateChannelHighlights() {
+      document.querySelectorAll('input[name="monitor-ch"]').forEach(el => {
+        el.closest('label').classList.toggle('active-ch', el.checked);
+      });
+    }
+    updateChannelHighlights();
   </script>
 </body>
 </html>

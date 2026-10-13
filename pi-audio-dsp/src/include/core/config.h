@@ -45,7 +45,7 @@ struct FullConfig {
     int bufferSize = 512;
     int volume = 65;
     bool muted = false;
-    
+
     std::map<std::string, BandConfig> bands;
     std::vector<DriverConfig> drivers;
     LimiterConfig limiter;

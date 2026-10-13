@@ -246,4 +246,7 @@ CMakeFiles/audio_core.dir/src/lib/adapters/test.cpp.o: \
  /usr/include/linux/limits.h \
  /usr/include/x86_64-linux-gnu/bits/posix2_lim.h \
  /usr/include/x86_64-linux-gnu/bits/xopen_lim.h \
- /usr/include/x86_64-linux-gnu/bits/uio_lim.h
+ /usr/include/x86_64-linux-gnu/bits/uio_lim.h /usr/include/c++/15/thread \
+ /usr/include/c++/15/bits/std_thread.h \
+ /usr/include/c++/15/bits/unique_ptr.h \
+ /usr/include/c++/15/bits/this_thread_sleep.h /usr/include/c++/15/chrono

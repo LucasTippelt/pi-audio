@@ -16,6 +16,7 @@ set(CMAKE_DEPENDS_DEPENDENCY_FILES
   "/var/www/pi-audio/pi-audio-dsp/src/lib/core/engine.cpp" "CMakeFiles/audio_core.dir/src/lib/core/engine.cpp.o" "gcc" "CMakeFiles/audio_core.dir/src/lib/core/engine.cpp.o.d"
   "/var/www/pi-audio/pi-audio-dsp/src/lib/core/logger.cpp" "CMakeFiles/audio_core.dir/src/lib/core/logger.cpp.o" "gcc" "CMakeFiles/audio_core.dir/src/lib/core/logger.cpp.o.d"
   "/var/www/pi-audio/pi-audio-dsp/src/lib/core/monitor.cpp" "CMakeFiles/audio_core.dir/src/lib/core/monitor.cpp.o" "gcc" "CMakeFiles/audio_core.dir/src/lib/core/monitor.cpp.o.d"
+  "/var/www/pi-audio/pi-audio-dsp/src/lib/core/tcp_relay.cpp" "CMakeFiles/audio_core.dir/src/lib/core/tcp_relay.cpp.o" "gcc" "CMakeFiles/audio_core.dir/src/lib/core/tcp_relay.cpp.o.d"
   )
 
 # Targets to which this target links which contain Fortran sources.

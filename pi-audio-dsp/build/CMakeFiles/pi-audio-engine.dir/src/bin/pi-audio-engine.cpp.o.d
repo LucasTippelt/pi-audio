@@ -231,8 +231,9 @@ CMakeFiles/pi-audio-engine.dir/src/bin/pi-audio-engine.cpp.o: \
  /usr/include/c++/15/bits/istream.tcc /usr/include/c++/15/bits/codecvt.h \
  /usr/include/x86_64-linux-gnu/c++/15/bits/basic_file.h \
  /usr/include/x86_64-linux-gnu/c++/15/bits/c++io.h \
- /usr/include/c++/15/bits/fstream.tcc /usr/include/c++/15/iostream \
- /usr/include/signal.h \
+ /usr/include/c++/15/bits/fstream.tcc \
+ /var/www/pi-audio/pi-audio-dsp/build/version_generated.h \
+ /usr/include/c++/15/iostream /usr/include/signal.h \
  /usr/include/x86_64-linux-gnu/bits/signum-generic.h \
  /usr/include/x86_64-linux-gnu/bits/signum-arch.h \
  /usr/include/x86_64-linux-gnu/bits/types/sig_atomic_t.h \

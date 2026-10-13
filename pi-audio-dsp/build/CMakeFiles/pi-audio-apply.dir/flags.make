@@ -4,7 +4,7 @@
 # compile CXX with /usr/bin/c++
 CXX_DEFINES = 
 
-CXX_INCLUDES = -I/var/www/pi-audio/pi-audio-dsp/src/include
+CXX_INCLUDES = -I/var/www/pi-audio/pi-audio-dsp/build -I/var/www/pi-audio/pi-audio-dsp/src/include
 
 CXX_FLAGS = -std=gnu++17
 

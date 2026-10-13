@@ -21,12 +21,14 @@ static void writeEngineState() {
     std::ostringstream json;
     json << "{"
           << "\"version\":\"" << PI_AUDIO_VERSION << "\","
-          << "\"input\":\"" << cfg.input << "\","
-          << "\"output\":\"" << cfg.output << "\","
+          << "\"input\":\"" << cfg.capture << "\","
+          << "\"output\":\"" << cfg.playback << "\","
           << "\"sampleRate\":" << cfg.sampleRate << ","
           << "\"BufferSize\":" << cfg.bufferSize << ","
+          << "\"outputChannels\":" << cfg.outputChannels << ","
           << "\"volume\":" << g_engine->getVolume() << ","
-          << "\"muted\":" << (g_engine->isMuted() ? "true" : "false")
+          << "\"muted\":" << (g_engine->isMuted() ? "true" : "false") << ","
+          << "\"pgmSuspended\":" << (g_engine->isPgmSuspended() ? "true" : "false")
           << "}";
     const char* tmpPath = "/run/pi-audio/engine-state.json.tmp";
     const char* finalPath = "/run/pi-audio/engine-state.json";
@@ -44,10 +46,11 @@ static EngineConfig loadEngineConfig(const std::string& path) {
     if (cm->loadFromFile(path)) {
         auto fc = cm->getConfig();
         EngineConfig ec;
-        ec.input = fc.input;
-        ec.output = fc.output;
+        ec.capture = fc.input;
+        ec.playback = fc.output;
         ec.sampleRate = fc.sampleRate;
         ec.bufferSize = fc.bufferSize;
+        ec.outputChannels = 4;
         ec.volume = fc.volume;
         ec.muted = fc.muted;
         return ec;
@@ -58,14 +61,14 @@ static EngineConfig loadEngineConfig(const std::string& path) {
 static void reloadFromConfig() {
     if (!g_engine) return;
     EngineConfig newCfg = loadEngineConfig(g_configFile);
-    if (!newCfg.input.empty()) {
+    if (!newCfg.capture.empty() || !newCfg.playback.empty()) {
         g_engine->setVolume(newCfg.volume);
         g_engine->setMuted(newCfg.muted);
 
         bool needRestart = (newCfg.sampleRate != g_engineConfig.sampleRate ||
                             newCfg.bufferSize != g_engineConfig.bufferSize ||
-                            newCfg.input != g_engineConfig.input ||
-                            newCfg.output != g_engineConfig.output);
+                            newCfg.capture != g_engineConfig.capture ||
+                            newCfg.playback != g_engineConfig.playback);
 
         if (needRestart) {
             Logger::getInstance().info("Reloading: engine restart required");
@@ -112,7 +115,6 @@ int main(int argc, char* argv[]) {
     Logger::getInstance().init(logFile, LogLevel::DEBUG, 1024 * 1024, 3);
     Logger::getInstance().info("Pi Audio Engine v" + std::string(PI_AUDIO_VERSION) + " built " + std::string(PI_AUDIO_BUILD_TIME));
 
-    // Load configuration
     auto configManager = ConfigManager::instance();
     if (!configManager->loadFromFile(configFile)) {
         Logger::getInstance().error("Failed to load configuration");
@@ -121,7 +123,6 @@ int main(int argc, char* argv[]) {
 
     EngineConfig engineConfig = loadEngineConfig(configFile);
 
-    // Initialize engine
     g_engine = new AudioEngine();
     if (!g_engine->initialize(engineConfig)) {
         Logger::getInstance().error("Failed to initialize audio engine");
@@ -132,13 +133,11 @@ int main(int argc, char* argv[]) {
 
     g_engineConfig = engineConfig;
 
-    // Setup signal handlers
     signal(SIGINT, signalHandler);
     signal(SIGTERM, signalHandler);
 
     Logger::getInstance().info("Engine initialized successfully");
 
-    // Create status file for web interface
     {
         FILE* f = fopen("/run/pi-audio/status", "w");
         if (f) {
@@ -150,13 +149,10 @@ int main(int argc, char* argv[]) {
 
     writeEngineState();
 
-    // Start playback
     g_engine->start();
     Logger::getInstance().info("Playback started");
 
-    // Keep running until stopped
     while (g_engine->isRunning()) {
-        // Check for reload trigger from apply adapter
         struct stat st;
         if (stat("/run/pi-audio/reload", &st) == 0) {
             Logger::getInstance().info("Reload trigger received");
@@ -170,7 +166,6 @@ int main(int argc, char* argv[]) {
     delete g_engine;
     g_engine = nullptr;
 
-    // Remove status file
     std::remove("/run/pi-audio/status");
 
     Logger::getInstance().info("Engine stopped");

@@ -1,21 +1,21 @@
 #!/bin/bash
 # Deployment script for Pi Audio DSP Engine (monorepo)
-# Run from: /var/www/pi-audio/
-
+# Run from: /var/www/pi-audio/pi-audio-dsp/
 set -e
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DSP_DIR="$REPO_DIR/pi-audio-dsp"
 WEB_DIR="$REPO_DIR/pi-audio-web"
+BUILD_DIR="$DSP_DIR/build"
 
 echo "Deploying from $REPO_DIR"
 
 # Build DSP engine
 echo "Building DSP engine..."
-cd "$DSP_DIR"
-rm -rf build
-mkdir build && cd build
-cmake ..
+rm -rf "$BUILD_DIR"
+mkdir -p "$BUILD_DIR"
+cd "$BUILD_DIR"
+cmake "$DSP_DIR"
 make -j$(nproc)
 cd "$REPO_DIR"
 
@@ -25,21 +25,6 @@ sudo mkdir -p /etc/pi-audio/presets
 sudo mkdir -p /var/log/pi-audio
 sudo mkdir -p /run/pi-audio
 sudo chown pi:audio /run/pi-audio
-
-# Install binaries
-sudo cp "$DSP_DIR/build/pi-audio-engine" /usr/local/bin/
-sudo cp "$DSP_DIR/build/pi-audio-apply" /usr/local/bin/
-sudo cp "$DSP_DIR/build/pi-audio-status" /usr/local/bin/
-sudo cp "$DSP_DIR/build/pi-audio-measure" /usr/local/bin/
-sudo cp "$DSP_DIR/build/pi-audio-test" /usr/local/bin/
-
-# Set permissions
-sudo chmod 755 /usr/local/bin/pi-audio-*
-
-# Install systemd service
-sudo cp "$DSP_DIR/pi-audio-engine.service" /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable pi-audio-engine
 
 # Set group to audio so www-data (in audio group) can read/write
 sudo chown -R pi:audio /etc/pi-audio/
@@ -101,8 +86,18 @@ sudo tee /etc/apache2/sites-enabled/pi-audio.conf > /dev/null << 'EOF'
 </VirtualHost>
 EOF
 
-sudo systemctl restart apache2
+# Install WebSocket server service
+sudo cp "$DSP_DIR/pi-audio-ws-server.service" /etc/systemd/system/
+sudo mkdir -p /etc/systemd/system/pi-audio-ws-server.service.d
+sudo cp "$DSP_DIR/overrides/10-vm-user.conf" /etc/systemd/system/pi-audio-ws-server.service.d/
+sudo systemctl daemon-reload
+sudo systemctl enable pi-audio-ws-server
 
+# Call redeploy.sh to install binaries and restart all services
+echo ""
+echo "Running redeploy..."
+bash "$DSP_DIR/redeploy.sh"
+
+echo ""
 echo "Installation complete!"
-echo "Start the engine with: sudo systemctl start pi-audio-engine"
 echo "Web interface: http://<your-pi-ip>/"

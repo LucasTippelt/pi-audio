@@ -393,6 +393,60 @@ session_start();
       echo "<p class='warn'>Engine state file not found at $statePath — engine may not be writing state, or engine-state.json was not created after the latest build.</p>\n";
   }
 
+  // ---- WEBSOCKET SERVER ----
+  sectionHeading('WebSocket Monitoring Server');
+  echo "<table>\n";
+  $wsSvc = shell_exec('systemctl is-active pi-audio-ws-server 2>&1');
+  row('Service', trim((string)$wsSvc), trim((string)$wsSvc) === 'active' ? 'ok' : 'warn');
+
+  $wsPid = @shell_exec('pgrep -f ws-audio-server-node.js 2>/dev/null');
+  if ($wsPid && trim($wsPid) !== '') {
+      row('PID', trim($wsPid), 'ok');
+  } else {
+      row('PID', '(not running)', 'warn');
+  }
+
+  /* Check health endpoint */
+  $health = @file_get_contents('http://127.0.0.1:8765/health');
+  if ($health) {
+      $h = json_decode($health, true);
+      if (is_array($h)) {
+          row('Health', 'OK (WS:' . ($h['wsPort'] ?? '?') . ' TCP:' . ($h['tcpPort'] ?? '?') . ')', 'ok');
+      }
+  } else {
+      row('Health', 'unreachable', 'err');
+  }
+
+  /* Check version endpoint */
+  $ver = @file_get_contents('http://127.0.0.1:8765/version');
+  if ($ver) {
+      $v = json_decode($ver, true);
+      if (is_array($v)) {
+          row('Server Version', ($v['version'] ?? '?') . ' (built ' . ($v['buildTime'] ?? '?') . ')', 'ok');
+      }
+  } else {
+      row('Server Version', 'unreachable', 'warn');
+  }
+
+  /* Check Node.js */
+  $nodeVer = @shell_exec('node --version 2>/dev/null');
+  row('Node.js', trim((string)$nodeVer), $nodeVer ? 'ok' : 'warn');
+
+  /* Check ws package (local node_modules or system package) */
+  $wsPkg = @file_get_contents(__DIR__ . '/node_modules/ws/package.json');
+  $wsLoc = 'local';
+  if (!$wsPkg) {
+      $wsPkg = @file_get_contents('/usr/share/nodejs/ws/package.json');
+      $wsLoc = 'system';
+  }
+  if ($wsPkg) {
+      $wp = json_decode($wsPkg, true);
+      row('ws package', 'v' . ($wp['version'] ?? '?') . ' (' . $wsLoc . ')', 'ok');
+  } else {
+      row('ws package', '(not installed)', 'err');
+  }
+  echo "</table>\n";
+
   // ---- SERVICE STATUS ----
   sectionHeading('Systemd Service');
   $svcStatus = shell_exec('systemctl is-active pi-audio-engine 2>&1');

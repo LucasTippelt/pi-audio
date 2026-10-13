@@ -19,10 +19,25 @@ try {
 } catch(e) {}
 console.log('pi-audio-ws-server v' + versionInfo.version + ' (built ' + versionInfo.buildTime + ')');
 
+/* Channel name to index mapping */
 const CHANNELS = {
   'pgm-l': 0,
   'pgm-r': 1,
+  'woofer-l': 2,
+  'tweeter-l': 3,
+  'woofer-r': 4,
+  'tweeter-r': 5,
+  'mic-1': 6,
+  'mic-2': 7,
+  'mic-3': 8,
+  'mic-4': 9,
 };
+
+/* Reverse map: index to name */
+const CH_NAMES = {};
+for (const [name, idx] of Object.entries(CHANNELS)) {
+  CH_NAMES[idx] = name;
+}
 
 /* HTTP server for version endpoint */
 const httpServer = http.createServer((req, res) => {
@@ -39,11 +54,16 @@ const httpServer = http.createServer((req, res) => {
 });
 
 /* WebSocket server: relay to browser clients */
-const wss = new WebSocket.Server({ server: httpServer, port: WS_PORT });
-console.log('WebSocket server on ws://0.0.0.0:' + WS_PORT);
+const wss = new WebSocket.Server({ server: httpServer });
+httpServer.listen(WS_PORT, () => {
+  console.log('WebSocket server on ws://0.0.0.0:' + WS_PORT);
+});
 
 /* Per-channel WebSocket client lists */
-const clients = { 0: [], 1: [] };
+const clients = {};
+for (const idx of Object.values(CHANNELS)) {
+  clients[idx] = [];
+}
 
 wss.on('connection', (ws, req) => {
   const url = new URL(req.url, 'http://localhost');
@@ -87,20 +107,10 @@ wss.on('connection', (ws, req) => {
   ws._addStats = (b) => { framesSent++; bytesSent += b; };
 });
 
-/* Split interleaved stereo float32 into two mono buffers */
-function splitStereo(stereo, sampleCount) {
-  const lBuf = Buffer.allocUnsafe(sampleCount * 4);
-  const rBuf = Buffer.allocUnsafe(sampleCount * 4);
-  for (let i = 0; i < sampleCount; i++) {
-    stereo.copy(lBuf, i * 4, i * 8, i * 8 + 4);
-    stereo.copy(rBuf, i * 4, i * 8 + 4, i * 8 + 8);
-  }
-  return [lBuf, rBuf];
-}
-
 /* Broadcast mono buffer to all clients for a channel */
 function broadcast(chIdx, monoBuf) {
   const chClients = clients[chIdx];
+  if (!chClients) return;
   for (let i = chClients.length - 1; i >= 0; i--) {
     const ws = chClients[i];
     if (ws.readyState === WebSocket.OPEN) {
@@ -130,21 +140,22 @@ const tcpServer = net.createServer((socket) => {
   socket.on('data', (data) => {
     buf = Buffer.concat([buf, data]);
 
-    while (buf.length >= 4) {
-      const sampleCount = buf.readUInt32BE(0);
-      const msgLen = 4 + sampleCount * 8;
+    while (buf.length >= 5) {
+      /* Protocol: [1 byte channel ID][4 bytes BE sample count][sampleCount × 4 bytes mono float32] */
+      const channelId = buf.readUInt8(0);
+      const sampleCount = buf.readUInt32BE(1);
+      const msgLen = 5 + sampleCount * 4;
       if (buf.length < msgLen) break;
 
-      buf = buf.slice(4);
-      const stereo = buf.slice(0, msgLen - 4);
-      buf = buf.slice(msgLen - 4);
+      buf = buf.slice(1);
+      const monoBuf = buf.slice(4, 4 + sampleCount * 4);
+      buf = buf.slice(4 + sampleCount * 4);
 
       tcpBytesTotal += msgLen;
       tcpMsgCount++;
 
-      const [lBuf, rBuf] = splitStereo(stereo, sampleCount);
-      broadcast(0, lBuf);
-      broadcast(1, rBuf);
+      const chName = CH_NAMES[channelId] || ('ch-' + channelId);
+      broadcast(channelId, monoBuf);
     }
   });
 

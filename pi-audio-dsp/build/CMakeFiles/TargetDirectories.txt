@@ -1,4 +1,5 @@
 /var/www/pi-audio/pi-audio-dsp/build/CMakeFiles/audio_core.dir
+/var/www/pi-audio/pi-audio-dsp/build/CMakeFiles/gen_version.dir
 /var/www/pi-audio/pi-audio-dsp/build/CMakeFiles/pi-audio-engine.dir
 /var/www/pi-audio/pi-audio-dsp/build/CMakeFiles/pi-audio-apply.dir
 /var/www/pi-audio/pi-audio-dsp/build/CMakeFiles/pi-audio-status.dir

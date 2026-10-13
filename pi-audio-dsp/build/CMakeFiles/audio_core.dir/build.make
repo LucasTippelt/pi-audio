@@ -128,10 +128,24 @@ CMakeFiles/audio_core.dir/src/lib/core/monitor.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/audio_core.dir/src/lib/core/monitor.cpp.s"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /var/www/pi-audio/pi-audio-dsp/src/lib/core/monitor.cpp -o CMakeFiles/audio_core.dir/src/lib/core/monitor.cpp.s
 
+CMakeFiles/audio_core.dir/src/lib/core/tcp_relay.cpp.o: CMakeFiles/audio_core.dir/flags.make
+CMakeFiles/audio_core.dir/src/lib/core/tcp_relay.cpp.o: /var/www/pi-audio/pi-audio-dsp/src/lib/core/tcp_relay.cpp
+CMakeFiles/audio_core.dir/src/lib/core/tcp_relay.cpp.o: CMakeFiles/audio_core.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/var/www/pi-audio/pi-audio-dsp/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Building CXX object CMakeFiles/audio_core.dir/src/lib/core/tcp_relay.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/audio_core.dir/src/lib/core/tcp_relay.cpp.o -MF CMakeFiles/audio_core.dir/src/lib/core/tcp_relay.cpp.o.d -o CMakeFiles/audio_core.dir/src/lib/core/tcp_relay.cpp.o -c /var/www/pi-audio/pi-audio-dsp/src/lib/core/tcp_relay.cpp
+
+CMakeFiles/audio_core.dir/src/lib/core/tcp_relay.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/audio_core.dir/src/lib/core/tcp_relay.cpp.i"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /var/www/pi-audio/pi-audio-dsp/src/lib/core/tcp_relay.cpp > CMakeFiles/audio_core.dir/src/lib/core/tcp_relay.cpp.i
+
+CMakeFiles/audio_core.dir/src/lib/core/tcp_relay.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/audio_core.dir/src/lib/core/tcp_relay.cpp.s"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /var/www/pi-audio/pi-audio-dsp/src/lib/core/tcp_relay.cpp -o CMakeFiles/audio_core.dir/src/lib/core/tcp_relay.cpp.s
+
 CMakeFiles/audio_core.dir/src/lib/adapters/apply.cpp.o: CMakeFiles/audio_core.dir/flags.make
 CMakeFiles/audio_core.dir/src/lib/adapters/apply.cpp.o: /var/www/pi-audio/pi-audio-dsp/src/lib/adapters/apply.cpp
 CMakeFiles/audio_core.dir/src/lib/adapters/apply.cpp.o: CMakeFiles/audio_core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/var/www/pi-audio/pi-audio-dsp/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Building CXX object CMakeFiles/audio_core.dir/src/lib/adapters/apply.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/var/www/pi-audio/pi-audio-dsp/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_6) "Building CXX object CMakeFiles/audio_core.dir/src/lib/adapters/apply.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/audio_core.dir/src/lib/adapters/apply.cpp.o -MF CMakeFiles/audio_core.dir/src/lib/adapters/apply.cpp.o.d -o CMakeFiles/audio_core.dir/src/lib/adapters/apply.cpp.o -c /var/www/pi-audio/pi-audio-dsp/src/lib/adapters/apply.cpp
 
 CMakeFiles/audio_core.dir/src/lib/adapters/apply.cpp.i: cmake_force
@@ -145,7 +159,7 @@ CMakeFiles/audio_core.dir/src/lib/adapters/apply.cpp.s: cmake_force
 CMakeFiles/audio_core.dir/src/lib/adapters/measure.cpp.o: CMakeFiles/audio_core.dir/flags.make
 CMakeFiles/audio_core.dir/src/lib/adapters/measure.cpp.o: /var/www/pi-audio/pi-audio-dsp/src/lib/adapters/measure.cpp
 CMakeFiles/audio_core.dir/src/lib/adapters/measure.cpp.o: CMakeFiles/audio_core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/var/www/pi-audio/pi-audio-dsp/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_6) "Building CXX object CMakeFiles/audio_core.dir/src/lib/adapters/measure.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/var/www/pi-audio/pi-audio-dsp/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_7) "Building CXX object CMakeFiles/audio_core.dir/src/lib/adapters/measure.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/audio_core.dir/src/lib/adapters/measure.cpp.o -MF CMakeFiles/audio_core.dir/src/lib/adapters/measure.cpp.o.d -o CMakeFiles/audio_core.dir/src/lib/adapters/measure.cpp.o -c /var/www/pi-audio/pi-audio-dsp/src/lib/adapters/measure.cpp
 
 CMakeFiles/audio_core.dir/src/lib/adapters/measure.cpp.i: cmake_force
@@ -159,7 +173,7 @@ CMakeFiles/audio_core.dir/src/lib/adapters/measure.cpp.s: cmake_force
 CMakeFiles/audio_core.dir/src/lib/adapters/status.cpp.o: CMakeFiles/audio_core.dir/flags.make
 CMakeFiles/audio_core.dir/src/lib/adapters/status.cpp.o: /var/www/pi-audio/pi-audio-dsp/src/lib/adapters/status.cpp
 CMakeFiles/audio_core.dir/src/lib/adapters/status.cpp.o: CMakeFiles/audio_core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/var/www/pi-audio/pi-audio-dsp/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_7) "Building CXX object CMakeFiles/audio_core.dir/src/lib/adapters/status.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/var/www/pi-audio/pi-audio-dsp/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_8) "Building CXX object CMakeFiles/audio_core.dir/src/lib/adapters/status.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/audio_core.dir/src/lib/adapters/status.cpp.o -MF CMakeFiles/audio_core.dir/src/lib/adapters/status.cpp.o.d -o CMakeFiles/audio_core.dir/src/lib/adapters/status.cpp.o -c /var/www/pi-audio/pi-audio-dsp/src/lib/adapters/status.cpp
 
 CMakeFiles/audio_core.dir/src/lib/adapters/status.cpp.i: cmake_force
@@ -173,7 +187,7 @@ CMakeFiles/audio_core.dir/src/lib/adapters/status.cpp.s: cmake_force
 CMakeFiles/audio_core.dir/src/lib/adapters/test.cpp.o: CMakeFiles/audio_core.dir/flags.make
 CMakeFiles/audio_core.dir/src/lib/adapters/test.cpp.o: /var/www/pi-audio/pi-audio-dsp/src/lib/adapters/test.cpp
 CMakeFiles/audio_core.dir/src/lib/adapters/test.cpp.o: CMakeFiles/audio_core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/var/www/pi-audio/pi-audio-dsp/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_8) "Building CXX object CMakeFiles/audio_core.dir/src/lib/adapters/test.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/var/www/pi-audio/pi-audio-dsp/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_9) "Building CXX object CMakeFiles/audio_core.dir/src/lib/adapters/test.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/audio_core.dir/src/lib/adapters/test.cpp.o -MF CMakeFiles/audio_core.dir/src/lib/adapters/test.cpp.o.d -o CMakeFiles/audio_core.dir/src/lib/adapters/test.cpp.o -c /var/www/pi-audio/pi-audio-dsp/src/lib/adapters/test.cpp
 
 CMakeFiles/audio_core.dir/src/lib/adapters/test.cpp.i: cmake_force
@@ -190,6 +204,7 @@ audio_core_OBJECTS = \
 "CMakeFiles/audio_core.dir/src/lib/core/config.cpp.o" \
 "CMakeFiles/audio_core.dir/src/lib/core/logger.cpp.o" \
 "CMakeFiles/audio_core.dir/src/lib/core/monitor.cpp.o" \
+"CMakeFiles/audio_core.dir/src/lib/core/tcp_relay.cpp.o" \
 "CMakeFiles/audio_core.dir/src/lib/adapters/apply.cpp.o" \
 "CMakeFiles/audio_core.dir/src/lib/adapters/measure.cpp.o" \
 "CMakeFiles/audio_core.dir/src/lib/adapters/status.cpp.o" \
@@ -202,13 +217,14 @@ libaudio_core.a: CMakeFiles/audio_core.dir/src/lib/core/engine.cpp.o
 libaudio_core.a: CMakeFiles/audio_core.dir/src/lib/core/config.cpp.o
 libaudio_core.a: CMakeFiles/audio_core.dir/src/lib/core/logger.cpp.o
 libaudio_core.a: CMakeFiles/audio_core.dir/src/lib/core/monitor.cpp.o
+libaudio_core.a: CMakeFiles/audio_core.dir/src/lib/core/tcp_relay.cpp.o
 libaudio_core.a: CMakeFiles/audio_core.dir/src/lib/adapters/apply.cpp.o
 libaudio_core.a: CMakeFiles/audio_core.dir/src/lib/adapters/measure.cpp.o
 libaudio_core.a: CMakeFiles/audio_core.dir/src/lib/adapters/status.cpp.o
 libaudio_core.a: CMakeFiles/audio_core.dir/src/lib/adapters/test.cpp.o
 libaudio_core.a: CMakeFiles/audio_core.dir/build.make
 libaudio_core.a: CMakeFiles/audio_core.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/var/www/pi-audio/pi-audio-dsp/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_9) "Linking CXX static library libaudio_core.a"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/var/www/pi-audio/pi-audio-dsp/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_10) "Linking CXX static library libaudio_core.a"
 	$(CMAKE_COMMAND) -P CMakeFiles/audio_core.dir/cmake_clean_target.cmake
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/audio_core.dir/link.txt --verbose=$(VERBOSE)
 
