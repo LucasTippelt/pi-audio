@@ -9,7 +9,8 @@
 set -e
 
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
-BUILD_DIR="${1:-/tmp/pi-audio-build}"
+BUILD_DIR="${1:-$REPO_DIR/pi-audio-dsp/build}"
+mkdir -p "$BUILD_DIR"
 
 # Read base version (X.Y.Z) from VERSION file
 BASE_VER="0.0.0"
@@ -17,14 +18,21 @@ if [ -f "$REPO_DIR/VERSION" ]; then
     BASE_VER=$(head -1 "$REPO_DIR/VERSION" | tr -d '[:space:]')
 fi
 
-# Read debug iteration (UIO) from VERSION file, default 0
+# Read debug iteration (UIO) from VERSION file, default 0, then increment
 UIO=0
 if [ -f "$REPO_DIR/VERSION" ]; then
     line2=$(sed -n '2p' "$REPO_DIR/VERSION" | tr -d '[:space:]')
     if [[ "$line2" =~ ^[0-9]+$ ]]; then
-        UIO=$line2
+        UIO=$((line2 + 1))
     fi
 fi
+
+# Write incremented UIO back to VERSION file (line 2)
+{
+    head -1 "$REPO_DIR/VERSION"
+    echo "$UIO"
+} > "$REPO_DIR/VERSION.tmp"
+mv "$REPO_DIR/VERSION.tmp" "$REPO_DIR/VERSION"
 
 GIT_HASH=$(cd "$REPO_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 GIT_BRANCH=$(cd "$REPO_DIR" && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
