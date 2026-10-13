@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+<head><title>WS Test</title></head>
+<body>
+<pre id="log"></pre>
+<script>
+const log = document.getElementById('log');
+function msg(t) { log.textContent += t + '\n'; console.log(t); }
+msg('Connecting...');
+const ws = new WebSocket('ws://192.168.178.136:8765/?ch=pgm-l');
+ws.binaryType = 'arraybuffer';
+ws.onopen = () => msg('OPEN');
+ws.onmessage = (e) => msg('MSG: ' + e.data.byteLength + ' bytes');
+ws.onerror = (e) => msg('ERROR');
+ws.onclose = (e) => msg('CLOSE: code=' + e.code + ' clean=' + e.wasClean);
+</script>
+</body>
+</html>

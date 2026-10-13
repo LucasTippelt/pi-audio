@@ -4,13 +4,13 @@ build/
 *.a
 *.so
 *.bin
+version_generated.h
 
 # IDE
 .vscode/
 .idea/
 .kilo/
 kilo-settings.json
-.kilo/
 
 # OS
 .DS_Store
@@ -19,5 +19,5 @@ Thumbs.db
 # Logs
 *.log
 
-# Config files (should not be committed)
+# Runtime (never commit)
 /etc/pi-audio/

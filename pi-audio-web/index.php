@@ -91,6 +91,7 @@ if (empty($_SESSION['csrf'])) {
               </div>
             </div>
             <p class="field-note" id="input-note">Selecting an input, sample rate, or buffer size applies the choice to the audio engine.</p>
+            <button class="test-pgm" type="button" id="test-pgm" aria-label="Test PGM Input" title="Play stereo whitenoise on Program output">Test PGM Input</button>
             <label class="field-label" for="audio-output">ALSA PLAYBACK DEVICE</label>
             <select class="select-control" id="audio-output"><option value="default">Loading devices…</option></select>
             <p class="field-note" id="output-note">For debugging only; remove after development.</p>

@@ -1,10 +1,14 @@
 #!/bin/bash
-# Quick redeploy — install rebuilt binaries and restart engine
+# Quick redeploy — install rebuilt binaries and restart all services
 # Run after: cd /tmp/pi-audio-build && make -j$(nproc)
 set -e
 
-BUILD_DIR="/tmp/pi-audio-build"
 DSP_DIR="$(cd "$(dirname "$0")" && pwd)"
+BUILD_DIR="$DSP_DIR/build"
+
+echo "Stopping engine..."
+sudo systemctl stop pi-audio-engine
+sleep 1
 
 echo "Installing binaries from $BUILD_DIR..."
 sudo cp "$BUILD_DIR/pi-audio-engine" /usr/local/bin/
@@ -24,8 +28,11 @@ sudo systemctl daemon-reload
 sudo chown root:audio /run/pi-audio
 sudo chmod 775 /run/pi-audio
 
-# Restart engine
+# Restart all services
+echo "Restarting services..."
 sudo systemctl restart pi-audio-engine
+sudo systemctl restart apache2
+sudo systemctl restart pi-audio-ws-server
 sleep 1
 
 echo ""
@@ -38,5 +45,7 @@ echo ""
 echo "Status adapter:"
 /usr/local/bin/pi-audio-status 2>&1
 echo ""
-echo "Engine status:"
-sudo systemctl is-active pi-audio-engine
+echo "Service status:"
+echo "  Engine:       $(sudo systemctl is-active pi-audio-engine)"
+echo "  Apache:       $(sudo systemctl is-active apache2)"
+echo "  WS Server:    $(sudo systemctl is-active pi-audio-ws-server)"

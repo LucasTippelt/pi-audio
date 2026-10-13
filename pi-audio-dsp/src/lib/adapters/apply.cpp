@@ -5,6 +5,9 @@
 #include <fstream>
 #include <string>
 #include <cstdio>
+#include <chrono>
+#include <thread>
+#include <cstdlib>
 
 int applyAdapter(const std::string& configFile) {
     Logger::getInstance().info("Apply adapter invoked");
@@ -43,6 +46,57 @@ int applyAdapter(const std::string& configFile) {
         Logger::getInstance().info("Reload trigger written");
     } else {
         Logger::getInstance().warning("Failed to write reload trigger");
+    }
+
+    // Wait for engine to confirm by checking engine-state.json
+    // Engine writes this file every second in its main loop
+    const int maxWaitMs = 5000;
+    const int pollMs = 100;
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(maxWaitMs);
+
+    while (std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(pollMs));
+
+        std::ifstream stateFile("/run/pi-audio/engine-state.json");
+        if (!stateFile.is_open()) continue;
+
+        std::string stateContent((std::istreambuf_iterator<char>(stateFile)),
+                                  std::istreambuf_iterator<char>());
+        stateFile.close();
+
+        // Parse JSON manually to avoid dependency - look for sampleRate and BufferSize
+        size_t srPos = stateContent.find("\"sampleRate\":");
+        size_t bsPos = stateContent.find("\"BufferSize\":");
+        if (srPos == std::string::npos || bsPos == std::string::npos) continue;
+
+        // Extract sample rate value
+        srPos += 13; // skip "\"sampleRate\":"
+        while (srPos < stateContent.length() && (stateContent[srPos] == ' ' || stateContent[srPos] == '\t')) srPos++;
+        std::string srStr;
+        while (srPos < stateContent.length() && stateContent[srPos] >= '0' && stateContent[srPos] <= '9') {
+            srStr += stateContent[srPos++];
+        }
+
+        // Extract buffer size value
+        bsPos += 13; // skip "\"BufferSize\":"
+        while (bsPos < stateContent.length() && (stateContent[bsPos] == ' ' || stateContent[bsPos] == '\t')) bsPos++;
+        std::string bsStr;
+        while (bsPos < stateContent.length() && stateContent[bsPos] >= '0' && stateContent[bsPos] <= '9') {
+            bsStr += stateContent[bsPos++];
+        }
+
+        if (srStr.empty() || bsStr.empty()) continue;
+
+        int confirmedSr = std::atoi(srStr.c_str());
+        int confirmedBs = std::atoi(bsStr.c_str());
+
+        if (confirmedSr == config.sampleRate && confirmedBs == config.bufferSize) {
+            Logger::getInstance().info("Engine confirmed: sampleRate=" + srStr + ", BufferSize=" + bsStr);
+            break;
+        }
+
+        Logger::getInstance().info("Waiting for engine confirm: have " + srStr + "/" + bsStr +
+                                   ", need " + std::to_string(config.sampleRate) + "/" + std::to_string(config.bufferSize));
     }
 
     Logger::getInstance().info("Configuration applied successfully");

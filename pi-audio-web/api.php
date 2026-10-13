@@ -649,6 +649,18 @@ try {
         }
         respond(['tested' => $driverName]);
     }
+    if ($action === 'test-pgm') {
+        $binary = getenv('PI_AUDIO_TEST_BIN_WOOFER_L') ?: '/usr/local/bin/pi-audio-test';
+        if (!is_executable($binary)) respond(['error' => 'Test adapter not executable: ' . $binary], 503);
+        foreach (['PGM_L', 'PGM_R', 'Woofer_L', 'Tweeter_L', 'Woofer_R', 'Tweeter_R'] as $drv) {
+            $result = runCommand([$binary, $drv], '', 15);
+            if (!$result['ok']) {
+                $detail = $result['error'] ?: $result['output'] ?: 'Adapter failed';
+                respond(['error' => 'PGM test failed for ' . $drv . ': ' . $detail], 502);
+            }
+        }
+        respond(['tested' => 'PGM_L,PGM_R,Woofer_L,Tweeter_L,Woofer_R,Tweeter_R']);
+    }
     if ($action === 'preset-save') {
         $name = trim((string)($body['name'] ?? ''));
         if (!validPresetName($name)) respond(['error' => 'Use 1–32 letters, numbers, spaces, hyphens or underscores.'], 422);
@@ -782,6 +794,9 @@ try {
         $state = readState();
         $result = runCommand([$binary], json_encode($state, JSON_UNESCAPED_SLASHES), 180);
         $measurement = json_decode($result['output'] ?? '', true);
+        if (is_array($measurement) && isset($measurement['error'])) {
+            respond(['error' => $measurement['error'], 'message' => $measurement['message'] ?? ''], 501);
+        }
         $valid = is_array($measurement) ? validMeasurement($measurement) : null;
         $configuration = is_array($measurement['autoconfiguration'] ?? null) ? $measurement['autoconfiguration'] : null;
         $updates = [];
