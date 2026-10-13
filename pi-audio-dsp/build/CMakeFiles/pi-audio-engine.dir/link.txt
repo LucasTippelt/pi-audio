@@ -1,0 +1,1 @@
+/usr/bin/c++ -Wl,--dependency-file=CMakeFiles/pi-audio-engine.dir/link.d "CMakeFiles/pi-audio-engine.dir/src/bin/pi-audio-engine.cpp.o" -o pi-audio-engine  libaudio_core.a -lasound

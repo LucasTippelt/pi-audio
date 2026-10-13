@@ -1,0 +1,5 @@
+/usr/local/bin/pi-audio-engine
+/usr/local/bin/pi-audio-apply
+/usr/local/bin/pi-audio-status
+/usr/local/bin/pi-audio-measure
+/usr/local/bin/pi-audio-test
