@@ -88,8 +88,6 @@ EOF
 
 # Install WebSocket server service
 sudo cp "$REPO_DIR/pi-audio-ws-server.service" /etc/systemd/system/
-sudo mkdir -p /etc/systemd/system/pi-audio-ws-server.service.d
-sudo cp "$DSP_DIR/overrides/10-vm-user.conf" /etc/systemd/system/pi-audio-ws-server.service.d/
 sudo systemctl daemon-reload
 sudo systemctl enable pi-audio-ws-server
 

@@ -22,14 +22,16 @@ make -j$(nproc)
 
 ## Deploy
 
-### Raspberry Pi (production)
+Full installation is documented in the [root README](../README.md#quick-install).
+
+### Production
 
 ```bash
 cd pi-audio-dsp
 sudo ./deploy.sh
 ```
 
-The deploy script builds the engine, installs binaries to `/usr/local/bin/`, configures the systemd service, and sets up Apache.
+Builds the engine, installs binaries to `/usr/local/bin/`, and configures the systemd service.
 
 ### VM / Development
 
@@ -39,18 +41,9 @@ mkdir build && cd build
 cmake ..
 make -j$(nproc)
 
-# Deploy with VM override (uses current user instead of pi:audio)
-cd .. && sudo bash deploy-vm.sh
-```
-
-For subsequent rebuilds:
-
-```bash
-cd build && make -j$(nproc)
+# Quick redeploy (stops engine, copies binaries, restarts)
 cd .. && sudo bash redeploy.sh
 ```
-
-The `redeploy.sh` script stops the engine first (to avoid "Text file busy" errors), copies binaries, reinstalls the service, fixes permissions, and restarts the engine.
 
 ## Architecture
 

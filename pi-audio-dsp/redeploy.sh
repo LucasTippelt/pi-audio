@@ -18,10 +18,8 @@ sudo cp "$BUILD_DIR/pi-audio-measure" /usr/local/bin/
 sudo cp "$BUILD_DIR/pi-audio-test" /usr/local/bin/
 sudo chmod 755 /usr/local/bin/pi-audio-*
 
-# Install systemd service and VM override
+# Install systemd service
 sudo cp "$DSP_DIR/pi-audio-engine.service" /etc/systemd/system/
-sudo mkdir -p /etc/systemd/system/pi-audio-engine.service.d
-sudo cp "$DSP_DIR/overrides/10-vm-user.conf" /etc/systemd/system/pi-audio-engine.service.d/
 sudo systemctl daemon-reload
 
 # Fix permissions for runtime directories

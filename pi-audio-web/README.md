@@ -18,66 +18,7 @@ PHP/Apache control surface for the Pi Audio DSP engine. Tuning and preset data a
 
 ## Deploy on Raspberry Pi
 
-Copy the monorepo to `/var/www/pi-audio`, enable Apache's `auth_basic` and `headers` modules, and allow `.htaccess` overrides for the site directory. Enable PHP for Apache:
-
-```sh
-sudo apt install apache2 php libapache2-mod-php alsa-utils
-sudo a2enmod auth_basic headers
-sudo install -d -o root -g www-data -m 0750 /etc/pi-audio
-sudo htpasswd -c /etc/pi-audio/htpasswd pi-audio
-sudo chown root:www-data /etc/pi-audio/htpasswd
-sudo chmod 0640 /etc/pi-audio/htpasswd
-sudo install -d -o www-data -g www-data -m 0770 /etc/pi-audio/config /etc/pi-audio/presets
-sudo chown -R www-data:www-data /var/www/pi-audio
-```
-
-Save a site configuration at `/etc/apache2/sites-available/pi-audio.conf`, then enable it with `sudo a2ensite pi-audio.conf`, disable the default site with `sudo a2dissite 000-default.conf` and reload Apache:
-
-```apache
-<VirtualHost *:80>
-    DocumentRoot /var/www/pi-audio/pi-audio-web
-    <Directory /var/www/pi-audio/pi-audio-web>
-        AllowOverride All
-        Require all granted
-    </Directory>
-    SetEnv PI_AUDIO_STATUS_BIN /usr/local/bin/pi-audio-status
-    SetEnv PI_AUDIO_APPLY_BIN /usr/local/bin/pi-audio-apply
-    SetEnv PI_AUDIO_MEASURE_BIN /usr/local/bin/pi-audio-measure
-    SetEnv PI_AUDIO_TEST_BIN_WOOFER_L /usr/local/bin/pi-audio-test
-    SetEnv PI_AUDIO_TEST_BIN_WOOFER_R /usr/local/bin/pi-audio-test
-    SetEnv PI_AUDIO_TEST_BIN_TWEETER_L /usr/local/bin/pi-audio-test
-    SetEnv PI_AUDIO_TEST_BIN_TWEETER_R /usr/local/bin/pi-audio-test
-    SetEnv PI_AUDIO_CONFIG_DIR /etc/pi-audio/config
-    SetEnv PI_AUDIO_PRESETS_DIR /etc/pi-audio/presets
-    SetEnv PI_AUDIO_CARD 0
-    SetEnv PI_AUDIO_CONTROL PCM
-    SetEnv PI_AUDIO_XRUN_FILE /run/pi-audio/xruns
-</VirtualHost>
-```
-
-Username for web login is `pi-audio`.
-
-### Apache systemd sandbox
-
-Apache's systemd sandbox must permit the PHP worker to inspect ALSA and open the mixer control. Create an override with `sudo systemctl edit apache2`:
-
-```ini
-[Service]
-ReadWritePaths=/etc/pi-audio/config /etc/pi-audio/presets
-PrivateDevices=no
-ProcSubset=all
-DeviceAllow=/dev/snd/controlC0 rw
-```
-
-Then apply it:
-
-```sh
-sudo systemctl daemon-reload
-sudo systemctl restart apache2
-sudo systemctl show apache2 -p PrivateDevices -p DevicePolicy -p DeviceAllow -p ProcSubset
-```
-
-These settings reduce Apache's device and `/proc` isolation. Allow only the ALSA control device the service needs, and update `DeviceAllow` if the ALSA card number changes. Keep other sandbox protections enabled.
+See the [root README](../README.md#quick-install) for full installation instructions.
 
 ### ALSA access troubleshooting
 
@@ -112,30 +53,6 @@ sudo systemctl cat apache2
 ```
 
 For mod_php, `ProcSubset=all` and `DeviceAllow=/dev/snd/controlC0 rw` in the Apache override are required for mixer detection.
-
-## WebSocket Server Setup
-
-```bash
-# Install Node.js (18+)
-curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-sudo apt install -y nodejs
-
-# Install WebSocket server dependencies
-cd /var/www/pi-audio/pi-audio-web
-npm install ws
-
-# Install service file
-sudo cp /var/www/pi-audio/pi-audio-dsp/pi-audio-ws-server.service /etc/systemd/system/
-
-# Reload systemd and start
-sudo systemctl daemon-reload
-sudo systemctl enable pi-audio-ws-server
-sudo systemctl start pi-audio-ws-server
-
-# Check status
-sudo systemctl status pi-audio-ws-server
-sudo journalctl -u pi-audio-ws-server -f
-```
 
 ## DSP Integration
 
