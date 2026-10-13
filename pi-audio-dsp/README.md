@@ -45,6 +45,8 @@ make -j$(nproc)
 cd .. && sudo bash redeploy.sh
 ```
 
+The `redeploy.sh` script stops the engine first (to avoid "Text file busy" errors), copies binaries, reinstalls the service, fixes permissions, and restarts the engine.
+
 ## Architecture
 
 ```

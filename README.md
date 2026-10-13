@@ -385,6 +385,38 @@ Logs written to `/var/log/pi-audio/engine.log` with automatic rotation:
 - **Backups:** 3 rotated files (`engine.log.1`, `.2`, `.3`)
 - Older backups are overwritten on rotation
 
+### WebSocket Monitoring Server
+
+```bash
+# Install Node.js (18+)
+curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+sudo apt install -y nodejs
+
+# Install WebSocket server dependencies
+cd /var/www/pi-audio/pi-audio-web
+npm install ws
+```
+
+### Setup WebSocket Server Service
+
+```bash
+# Install service file
+sudo cp /var/www/pi-audio/pi-audio-dsp/pi-audio-ws-server.service /etc/systemd/system/
+
+# Create VM override (runs as current user instead of root:audio)
+sudo mkdir -p /etc/systemd/system/pi-audio-ws-server.service.d
+sudo cp /var/www/pi-audio/pi-audio-dsp/overrides/10-vm-user.conf /etc/systemd/system/pi-audio-ws-server.service.d/
+
+# Reload systemd and start
+sudo systemctl daemon-reload
+sudo systemctl enable pi-audio-ws-server
+sudo systemctl start pi-audio-ws-server
+
+# Check status
+sudo systemctl status pi-audio-ws-server
+sudo journalctl -u pi-audio-ws-server -f
+```
+
 ## Debugging
 
 ```bash
