@@ -836,6 +836,20 @@ async function testSpeaker(driver, button) {
   }
 }
 
+async function testPgm(button) {
+  button.disabled = true;
+  button.textContent = '…';
+  try {
+    const result = await request('test-pgm', {});
+    notify(`PGM test completed: ${result.tested}`);
+  } catch (error) {
+    notify(error.message, true);
+  } finally {
+    button.textContent = 'Test PGM Input';
+    button.disabled = false;
+  }
+}
+
 async function quickSavePreset() {
   const version = ui.presetVersion;
   clearTimeout(ui.saveTimer);
@@ -1006,6 +1020,7 @@ function bindEvents() {
     const button = event.target.closest('[data-test-speaker]');
     if (button && !button.disabled) testSpeaker(button.dataset.testSpeaker, button);
   });
+  $('#test-pgm').addEventListener('click', (event) => testPgm(event.currentTarget));
   document.querySelectorAll('[data-unit]').forEach((button) => button.addEventListener('click', () => {
     ui.delayUnit = button.dataset.unit;
     document.querySelectorAll('[data-unit]').forEach((item) => item.classList.toggle('active', item === button));

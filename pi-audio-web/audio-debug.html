@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>Pi Audio / Debug Audio Monitor</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'DM Mono', monospace, system-ui; background: #1a1a1a; color: #e0e0e0; padding: 2rem; }
+    h1 { font-size: 1.4rem; margin-bottom: 1rem; color: #8a9b4a; }
+    .panel { background: #2a2a2a; border-radius: 8px; padding: 1.5rem; margin-bottom: 1rem; }
+    .controls { display: flex; gap: 1rem; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; }
+    button {
+      background: #8a9b4a; color: #1a1a1a; border: none; padding: 0.6rem 1.2rem;
+      border-radius: 4px; font-family: inherit; font-weight: 600; cursor: pointer; font-size: 0.85rem;
+    }
+    button:hover { background: #9ab55a; }
+    button:disabled { background: #555; color: #888; cursor: not-allowed; }
+    button.stop { background: #c0392b; color: #fff; }
+    button.stop:hover { background: #e74c3c; }
+    .status { font-size: 0.8rem; color: #888; margin-top: 0.5rem; }
+    .status.active { color: #8a9b4a; }
+    .status.error { color: #e74c3c; }
+    .ch-select { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-bottom: 1rem; }
+    .ch-select label {
+      font-size: 0.75rem; color: #aaa; display: flex; align-items: center; gap: 0.3rem;
+      background: #333; padding: 0.3rem 0.6rem; border-radius: 3px; cursor: pointer;
+    }
+    .ch-select input[type="checkbox"] { accent-color: #8a9b4a; }
+    .ch-select label.disabled-ch { opacity: 0.4; }
+    .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.5rem; }
+    .metric { background: #333; padding: 0.6rem; border-radius: 4px; }
+    .metric-label { font-size: 0.7rem; color: #888; text-transform: uppercase; }
+    .metric-value { font-size: 1.1rem; color: #e0e0e0; margin-top: 0.2rem; }
+    canvas { width: 100%; height: 120px; background: #222; border-radius: 4px; margin-top: 0.5rem; }
+    .back { display: inline-block; margin-top: 1rem; color: #8a9b4a; text-decoration: none; font-size: 0.85rem; }
+    .back:hover { text-decoration: underline; }
+    .info { font-size: 0.75rem; color: #666; margin-top: 0.3rem; line-height: 1.4; }
+  </style>
+</head>
+<body>
+  <h1>Debug Audio Monitor</h1>
+
+  <div class="panel">
+    <div class="controls">
+      <button id="btn-start" onclick="startStream()">Start Monitor</button>
+      <button id="btn-stop" class="stop" onclick="stopStream()" disabled>Stop</button>
+      <span id="status" class="status">Idle &mdash; click Start to begin monitoring</span>
+    </div>
+
+    <div class="ch-select">
+      <span style="font-size:0.75rem;color:#888;">MONITOR:</span>
+      <label><input type="checkbox" data-ch="pgm-l"> PGM L</label>
+      <label><input type="checkbox" data-ch="pgm-r"> PGM R</label>
+      <label><input type="checkbox" checked data-ch="woofer-l"> Woofer L</label>
+      <label><input type="checkbox" checked data-ch="tweeter-l"> Tweeter L</label>
+      <label><input type="checkbox" data-ch="woofer-r"> Woofer R</label>
+      <label><input type="checkbox" data-ch="tweeter-r"> Tweeter R</label>
+      <label><input type="checkbox" data-ch="mic"> Mic Input</label>
+    </div>
+
+    <div class="metrics">
+      <div class="metric">
+        <div class="metric-label">Sample Rate</div>
+        <div class="metric-value" id="m-sr">&mdash;</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Channels</div>
+        <div class="metric-value" id="m-ch">&mdash;</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Queue Level</div>
+        <div class="metric-value" id="m-buf">&mdash;</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">RMS Level</div>
+        <div class="metric-value" id="m-rms">&mdash;</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Buffers Queued</div>
+        <div class="metric-value" id="m-chunks">0</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Drops</div>
+        <div class="metric-value" id="m-underruns">0</div>
+      </div>
+    </div>
+    <canvas id="waveform"></canvas>
+    <div class="info">
+      Streams per-channel ring buffers (<code>/run/pi-audio/monitor-{channel}.raw</code>) and plays them through
+      the Web Audio API. Select channels above, then trigger a speaker test from the main UI to hear whitenoise.
+      Each channel has its own 4 MB mono ring buffer.
+    </div>
+  </div>
+
+  <a class="back" href="index.php">&larr; Back to main UI</a>
+
+  <script>
+     let audioCtx = null;
+    let running = false;
+    let chunkCount = 0;
+    let dropCount = 0;
+    let sampleRate = 48000;
+    let streamChannels = 1;
+    let scheduledEnd = 0;
+    let queueTimeMs = 0;
+    let waveData = new Float32Array(2048);
+    let lastDataTime = 0;
+    let srRefreshTimer = null;
+    let ws = null;
+    let wsReconnectTimer = null;
+    let audioAccum = new Uint8Array(0);
+    let wsConnectTime = 0;
+    let wsBytesTotal = 0;
+    const accumTargetMs = 100;
+    const WS_HOST = location.hostname || 'localhost';
+    const WS_PORT = 8765;
+    const WS_PROTO = location.protocol === 'https:' ? 'wss' : 'ws';
+
+    function getActiveChannels() {
+      const ch = {};
+      document.querySelectorAll('[data-ch]').forEach(el => {
+        ch[el.dataset.ch] = el.checked && !el.disabled;
+      });
+      return ch;
+    }
+
+    function setStatus(text, state) {
+      const el = document.getElementById('status');
+      el.textContent = text;
+      el.className = 'status' + (state ? ' ' + state : '');
+    }
+
+    function scheduleBuffer(buf) {
+      try {
+        const src = audioCtx.createBufferSource();
+        src.buffer = buf;
+        src.connect(audioCtx.destination);
+        const startAt = Math.max(audioCtx.currentTime, scheduledEnd);
+        src.start(startAt);
+        scheduledEnd = startAt + buf.duration;
+        queueTimeMs = Math.max(0, (scheduledEnd - audioCtx.currentTime) * 1000);
+        document.getElementById('m-buf').textContent = queueTimeMs.toFixed(0) + ' ms';
+      } catch(e) { console.error('[WS] scheduleBuffer error:', e); }
+    }
+
+    function buildAndSchedule(floats, frameCount) {
+      /* Update waveform and RMS. */
+      let rmsSum = 0;
+      const scanLen = Math.min(frameCount, 2048);
+      for (let i = 0; i < scanLen; i++) {
+        rmsSum += floats[i] * floats[i];
+        if (i < waveData.length) waveData[i] = floats[i];
+      }
+      const rms = Math.sqrt(rmsSum / Math.max(1, scanLen));
+      document.getElementById('m-rms').textContent =
+        (20 * Math.log10(Math.max(1e-10, rms))).toFixed(1) + ' dB';
+
+      const buf = audioCtx.createBuffer(1, frameCount, sampleRate);
+      const chData = buf.getChannelData(0);
+      for (let i = 0; i < frameCount; i++) {
+        chData[i] = floats[i] || 0;
+      }
+      scheduleBuffer(buf);
+    }
+
+    function startStream() {
+      if (running) return;
+      running = true;
+      scheduledEnd = 0;
+      chunkCount = 0;
+      dropCount = 0;
+      lastDataTime = 0;
+      waveData.fill(0);
+      streamChannels = 1;
+
+      document.getElementById('btn-start').disabled = true;
+      document.getElementById('btn-stop').disabled = false;
+      document.getElementById('m-chunks').textContent = '0';
+      document.getElementById('m-underruns').textContent = '0';
+      document.getElementById('m-buf').textContent = '\u2014';
+      document.getElementById('m-rms').textContent = '\u2014';
+      setStatus('Initializing...', 'active');
+
+      /* Fetch engine sample rate from status adapter before creating AudioContext */
+      fetch('api.php?action=dsp-status')
+        .then(resp => resp.json())
+        .then(data => {
+          const sr = data.sampleRate || 48000;
+          sampleRate = sr;
+          document.getElementById('m-sr').textContent = (sr / 1000).toFixed(1) + ' kHz';
+          initAudio(sr);
+        })
+        .catch(() => initAudio(48000));
+    }
+
+    function initAudio(sr) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: sr });
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      scheduledEnd = audioCtx.currentTime + 1.5;
+
+      const canvas = document.getElementById('waveform');
+      const ctx2d = canvas.getContext('2d');
+
+      function drawWave() {
+        if (!running) return;
+
+        const w = canvas.width = canvas.clientWidth * (window.devicePixelRatio || 1);
+        const h = canvas.height = 120 * (window.devicePixelRatio || 1);
+        ctx2d.fillStyle = '#1a1a1a';
+        ctx2d.fillRect(0, 0, w, h);
+
+        ctx2d.strokeStyle = '#333';
+        ctx2d.lineWidth = 1;
+        ctx2d.beginPath();
+        ctx2d.moveTo(0, h / 2);
+        ctx2d.lineTo(w, h / 2);
+        ctx2d.stroke();
+
+        const scroll = 3;
+        for (let i = 0; i < scroll; i++) {
+          waveData.set(waveData.slice(scroll));
+          for (let j = waveData.length - scroll; j < waveData.length; j++) {
+            waveData[j] = 0;
+          }
+        }
+        const fade = 0.985;
+        for (let i = 0; i < waveData.length; i++) {
+          waveData[i] *= fade;
+          if (Math.abs(waveData[i]) < 1e-6) waveData[i] = 0;
+        }
+
+        ctx2d.strokeStyle = '#8a9b4a';
+        ctx2d.lineWidth = 1.5;
+        ctx2d.beginPath();
+        for (let x = 0; x < w; x++) {
+          const idx = Math.floor((x / w) * waveData.length);
+          const v = waveData[idx] || 0;
+          const y = h / 2 - v * h / 2;
+          x === 0 ? ctx2d.moveTo(x, y) : ctx2d.lineTo(x, y);
+        }
+        ctx2d.stroke();
+
+        const barColor = queueTimeMs > 200 ? 'rgba(138,155,74,0.6)' : 'rgba(200,80,60,0.5)';
+        ctx2d.fillStyle = barColor;
+        ctx2d.fillRect(0, h - 3, w * Math.min(1, queueTimeMs / 1000), 3);
+
+        requestAnimationFrame(drawWave);
+      }
+      drawWave();
+
+      setStatus('Connecting WebSocket...', 'active');
+
+      srRefreshTimer = setInterval(() => {
+        if (!running) { clearInterval(srRefreshTimer); return; }
+        fetch('api.php?action=dsp-status')
+          .then(resp => resp.json())
+          .then(data => {
+            if (data.sampleRate && data.sampleRate !== sampleRate) {
+              sampleRate = data.sampleRate;
+              document.getElementById('m-sr').textContent = (sampleRate / 1000).toFixed(1) + ' kHz';
+            }
+          })
+          .catch(() => {});
+      }, 3000);
+
+      connectWebSocket();
+    }
+
+    function connectWebSocket() {
+      if (ws) {
+        try { ws.close(); } catch(e) {}
+        ws = null;
+      }
+      if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+
+      const active = getActiveChannels();
+      const ch = Object.keys(active).find(k => active[k]);
+      if (!ch) {
+        setStatus('No channel selected', 'error');
+        return;
+      }
+
+      audioAccum = new Uint8Array(0);
+      wsBytesTotal = 0;
+      const wsUrl = WS_PROTO + '://' + WS_HOST + ':' + WS_PORT + '/?ch=' + encodeURIComponent(ch);
+      console.log('[WS] Connecting to', wsUrl);
+      ws = new WebSocket(wsUrl);
+      ws.binaryType = 'arraybuffer';
+
+      ws.onopen = () => {
+        wsConnectTime = performance.now();
+        console.log('[WS] Connected');
+        setStatus('Streaming audio (WS)...', 'active');
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          console.log('[WS] msg type=' + (event.data instanceof ArrayBuffer ? 'arraybuffer' : typeof event.data) + ' size=' + (event.data ? event.data.byteLength || event.data.length : 0));
+          lastDataTime = performance.now();
+          const buf = event.data;
+          if (!buf || buf.byteLength < 4) return;
+
+        wsBytesTotal += buf.byteLength;
+        const elapsed = ((performance.now() - wsConnectTime) / 1000).toFixed(1);
+        const kb = (wsBytesTotal / 1024).toFixed(1);
+        setStatus(`Streaming (${kb} kB / ${elapsed}s)`, 'active');
+
+        const newAccum = new Uint8Array(audioAccum.length + buf.byteLength);
+        newAccum.set(audioAccum, 0);
+        newAccum.set(new Uint8Array(buf), audioAccum.length);
+        audioAccum = newAccum;
+
+        const targetBytes = Math.floor(sampleRate * accumTargetMs / 1000 * 4);
+        while (audioAccum.length >= targetBytes) {
+          const takeBytes = targetBytes;
+          const takeFrames = Math.floor(takeBytes / 4);
+          const floats = new Float32Array(audioAccum.buffer, audioAccum.byteOffset, takeFrames);
+          buildAndSchedule(floats, takeFrames);
+          chunkCount++;
+          document.getElementById('m-chunks').textContent = chunkCount;
+          document.getElementById('m-ch').textContent = '1';
+          audioAccum = audioAccum.slice(takeBytes);
+        }
+        } catch(e) { console.error('[WS] onmessage error:', e); }
+      };
+
+      ws.onerror = (err) => {
+        if (running) {
+          console.error('[WS] Error', err);
+          setStatus('WebSocket error, reconnecting...', 'error');
+        }
+      };
+
+      ws.onclose = (event) => {
+        console.log('[WS] Closed code=' + event.code + ' reason=' + (event.reason || '(none)') + ' clean=' + event.wasClean);
+        if (!running) return;
+        if (event.wasClean) {
+          setStatus('WebSocket closed (code ' + event.code + '), reconnecting...', 'active');
+        } else {
+          setStatus('WebSocket dropped, reconnecting...', 'error');
+        }
+        wsReconnectTimer = setTimeout(() => {
+          if (running) connectWebSocket();
+        }, 1000);
+      };
+    }
+
+    function stopStream() {
+      running = false;
+      if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+      if (ws) { try { ws.close(); } catch(e) {} ws = null; }
+      if (srRefreshTimer) clearInterval(srRefreshTimer);
+      if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+      document.getElementById('btn-start').disabled = false;
+      document.getElementById('btn-stop').disabled = true;
+      setStatus('Stopped', '');
+    }
+
+    window.addEventListener('unload', stopStream);
+
+    /* Restart stream when channel checkboxes change */
+    document.querySelectorAll('[data-ch]').forEach(el => {
+      el.addEventListener('change', () => {
+        if (!running) return;
+        setStatus('Channel changed, reconnecting...', 'active');
+        if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+        if (ws) { try { ws.close(); } catch(e) {} ws = null; }
+        audioAccum = new Uint8Array(0);
+        scheduledEnd = audioCtx.currentTime + 1.5;
+        chunkCount = 0;
+        dropCount = 0;
+        waveData.fill(0);
+        connectWebSocket();
+      });
+    });
+  </script>
+</body>
+</html>

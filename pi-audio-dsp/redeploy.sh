@@ -6,6 +6,10 @@ set -e
 BUILD_DIR="/tmp/pi-audio-build"
 DSP_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+echo "Stopping engine..."
+sudo systemctl stop pi-audio-engine
+sleep 1
+
 echo "Installing binaries from $BUILD_DIR..."
 sudo cp "$BUILD_DIR/pi-audio-engine" /usr/local/bin/
 sudo cp "$BUILD_DIR/pi-audio-apply" /usr/local/bin/

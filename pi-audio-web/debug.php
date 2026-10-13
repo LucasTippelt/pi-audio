@@ -45,6 +45,35 @@ session_start();
   function sectionHeading(string $title): void {
       echo "<h2>$title</h2>\n";
   }
+  function getBinaryStatus(string $name, string $logPath): array {
+      $result = ['running' => false, 'lastRun' => null, 'lastStatus' => 'unknown', 'lastLine' => ''];
+      $base = basename($name);
+      $pids = @shell_exec("pgrep -f " . escapeshellarg($name) . " 2>/dev/null");
+      if ($pids && trim($pids) !== '') {
+          $result['running'] = true;
+          $result['pids'] = array_map('trim', explode("\n", trim($pids)));
+      }
+      if (is_file($logPath)) {
+          $lines = @file($logPath);
+          if ($lines) {
+              $lastLine = trim(end($lines));
+              if ($lastLine !== '') {
+                  $result['lastLine'] = $lastLine;
+                  if (preg_match('/\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]/', $lastLine, $m)) {
+                      $result['lastRun'] = $m[1];
+                  }
+                  if (stripos($lastLine, 'ERROR') !== false || stripos($lastLine, 'FAILED') !== false) {
+                      $result['lastStatus'] = 'error';
+                  } elseif (stripos($lastLine, 'INFO') !== false && (stripos($lastLine, 'success') !== false || stripos($lastLine, 'applied') !== false || stripos($lastLine, 'written') !== false || stripos($lastLine, 'initialized') !== false)) {
+                      $result['lastStatus'] = 'success';
+                  } elseif (stripos($lastLine, 'INFO') !== false) {
+                      $result['lastStatus'] = 'info';
+                  }
+              }
+          }
+      }
+      return $result;
+  }
 
   // ---- ENVIRONMENT ----
   sectionHeading('Environment Variables');
@@ -156,6 +185,106 @@ session_start();
               ($exists ? 'exists' : 'MISSING') . ' | ' . ($exec ? 'executable' : 'NOT executable'),
               $cls);
       }
+  }
+   echo "</table>\n";
+
+  // ---- TEST SPEAKER BINARIES ----
+  sectionHeading('Test Speaker Binaries');
+  echo "<table>\n";
+  $testDrivers = [
+      'Woofer_L' => getenv('PI_AUDIO_TEST_BIN_WOOFER_L'),
+      'Tweeter_L' => getenv('PI_AUDIO_TEST_BIN_TWEETER_L'),
+      'Woofer_R' => getenv('PI_AUDIO_TEST_BIN_WOOFER_R'),
+      'Tweeter_R' => getenv('PI_AUDIO_TEST_BIN_TWEETER_R'),
+  ];
+  foreach ($testDrivers as $driver => $path) {
+      if (!$path) {
+          row($driver, '<em>not configured</em>', 'warn');
+      } else {
+          $exists = is_file($path);
+          $exec = is_executable($path);
+          $cls = $exec ? 'ok' : 'err';
+          row($driver . ' (' . basename($path) . ')',
+              ($exists ? 'exists' : 'MISSING') . ' | ' . ($exec ? 'executable' : 'NOT executable'),
+              $cls);
+      }
+  }
+   echo "</table>\n";
+
+  // ---- BINARY RUNTIME STATUS ----
+  sectionHeading('Binary Runtime Status');
+  echo "<table>\n";
+  echo "<tr><th>Binary</th><th>Running</th><th>Last Run</th><th>Status</th><th>Last Log Line</th></tr>\n";
+  $binaries = [
+      'Status' => ['bin' => getenv('PI_AUDIO_STATUS_BIN'), 'log' => '/var/log/pi-audio/status.log'],
+      'Apply' => ['bin' => getenv('PI_AUDIO_APPLY_BIN'), 'log' => '/var/log/pi-audio/apply.log'],
+      'Measure' => ['bin' => getenv('PI_AUDIO_MEASURE_BIN'), 'log' => '/var/log/pi-audio/measure.log'],
+      'Test' => ['bin' => '/usr/local/bin/pi-audio-test', 'log' => '/var/log/pi-audio/test.log'],
+  ];
+  foreach ($binaries as $label => $info) {
+      $bin = $info['bin'] ?: '/usr/local/bin/pi-audio-' . strtolower($label);
+      $log = $info['log'];
+      $st = getBinaryStatus($bin, $log);
+      $runCls = $st['running'] ? 'ok' : '';
+      $runBadge = $st['running']
+          ? '<span class="badge badge-ok">PID ' . implode(', ', $st['pids']) . '</span>'
+          : '<span class="badge badge-err">stopped</span>';
+      $lastRun = $st['lastRun'] ? $st['lastRun'] : 'never';
+      $statusCls = $st['lastStatus'] === 'error' ? 'err' : ($st['lastStatus'] === 'success' ? 'ok' : 'warn');
+      $statusLabel = ucfirst($st['lastStatus']);
+      $lastLine = htmlspecialchars(substr($st['lastLine'], -80));
+      echo "<tr>";
+      echo "<th>$label</th>";
+      echo "<td class=\"$runCls\">$runBadge</td>";
+      echo "<td>$lastRun</td>";
+      echo "<td class=\"$statusCls\">$statusLabel</td>";
+      echo "<td style=\"font-size:0.75rem;color:#888;\">$lastLine</td>";
+      echo "</tr>\n";
+  }
+  echo "</table>\n";
+
+  // ---- MONITOR RING BUFFER ----
+  sectionHeading('Monitor Ring Buffer');
+  echo "<table>\n";
+  $monitorPath = '/run/pi-audio/audio-monitor.raw';
+  if (is_file($monitorPath)) {
+      $mSize = filesize($monitorPath);
+      $mPerms = substr(sprintf('%o', fileperms($monitorPath)), -4);
+      $mOwner = function_exists('posix_getpwuid') ? posix_getpwuid(fileowner($monitorPath))['name'] : fileowner($monitorPath);
+      $mGroup = function_exists('posix_getgrgid') ? posix_getgrgid(filegroup($monitorPath))['name'] : filegroup($monitorPath);
+      $mReadable = is_readable($monitorPath) ? 'Yes' : 'No';
+      row('Path', $monitorPath, 'ok');
+      row('Size', number_format($mSize) . ' bytes (' . round($mSize / 1024 / 1024, 2) . ' MB)');
+      row('Permissions', "$mPerms $mOwner:$mGroup", $mReadable ? 'ok' : 'err');
+      row('Readable by www-data', $mReadable, $mReadable ? 'ok' : 'err');
+
+      /* Read header */
+      $mfp = fopen($monitorPath, 'rb');
+      if ($mfp) {
+          fseek($mfp, 0);
+          $mhdr = fread($mfp, 64);
+          fclose($mfp);
+          if ($mhdr && strlen($mhdr) >= 24 && substr($mhdr, 0, 4) === 'PIAM') {
+              $mWriteL = unpack('V', substr($mhdr, 6, 4))[1];
+              $mWriteH = unpack('V', substr($mhdr, 10, 4))[1];
+              $mWritePos = ($mWriteH << 32) | $mWriteL;
+              $mSr = unpack('V', substr($mhdr, 14, 4))[1];
+              $mCh = unpack('V', substr($mhdr, 18, 4))[1];
+              $mSeq = unpack('V', substr($mhdr, 20, 4))[1];
+              row('Magic', substr($mhdr, 0, 4), 'ok');
+              row('Sample Rate', $mSr . ' Hz');
+              row('Channels', $mCh);
+              row('Write Position', number_format($mWritePos) . ' bytes');
+              row('Sequence', $mSeq);
+              $utilPct = round(($mWritePos / $mSize) * 100, 1);
+              row('Buffer Usage', round($mWritePos / 1024 / 1024, 2) . ' MB (' . $utilPct . '%)');
+          } else {
+              row('Header', 'Invalid magic bytes', 'err');
+          }
+      }
+  } else {
+      row('Path', $monitorPath, 'warn');
+      row('Status', 'Not found — engine may not have started yet', 'warn');
   }
   echo "</table>\n";
 

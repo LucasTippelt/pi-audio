@@ -17,6 +17,7 @@ add_library(audio_core
     src/lib/core/engine.cpp
     src/lib/core/config.cpp
     src/lib/core/logger.cpp
+    src/lib/core/monitor.cpp
     src/lib/adapters/apply.cpp
     src/lib/adapters/measure.cpp
     src/lib/adapters/status.cpp

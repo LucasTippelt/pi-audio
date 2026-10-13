@@ -107,7 +107,7 @@ int main(int argc, char* argv[]) {
 
     g_configFile = configFile;
 
-    Logger::getInstance().init(logFile, LogLevel::DEBUG);
+    Logger::getInstance().init(logFile, LogLevel::DEBUG, 1024 * 1024, 3);
     Logger::getInstance().info("Starting Pi Audio Engine");
 
     // Load configuration
