@@ -115,7 +115,7 @@
     let audioAccum = new Uint8Array(0);
     let wsConnectTime = 0;
     let wsBytesTotal = 0;
-    const accumTargetMs = 100;
+    const accumTargetMs = 400;
     const WS_HOST = location.hostname || 'localhost';
     const WS_PORT = 8765;
     const WS_PROTO = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -244,7 +244,7 @@
         }
         ctx2d.stroke();
 
-        const barColor = queueTimeMs > 200 ? 'rgba(138,155,74,0.6)' : 'rgba(200,80,60,0.5)';
+        const barColor = queueTimeMs > 400 ? 'rgba(138,155,74,0.6)' : 'rgba(200,80,60,0.5)';
         ctx2d.fillStyle = barColor;
         ctx2d.fillRect(0, h - 3, w * Math.min(1, queueTimeMs / 1000), 3);
 

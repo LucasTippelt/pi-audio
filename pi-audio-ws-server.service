@@ -1,0 +1,16 @@
+[Unit]
+Description=Pi Audio WebSocket Server
+After=pi-audio-engine.service
+Wants=pi-audio-engine.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/node /var/www/pi-audio/pi-audio-web/ws-audio-server-node.js
+Restart=always
+RestartSec=3
+User=pi
+Group=audio
+WorkingDirectory=/var/www/pi-audio/pi-audio-web
+
+[Install]
+WantedBy=multi-user.target
