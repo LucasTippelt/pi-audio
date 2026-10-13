@@ -49,15 +49,30 @@ cd /tmp/pi-audio-build && make -j$(nproc)
 sudo bash redeploy.sh
 ```
 
+The `redeploy.sh` script stops the engine first (to avoid "Text file busy" errors), copies binaries, reinstalls the service, fixes permissions, and restarts the engine.
+
 ## Architecture
 
 ```
 pi-audio-dsp/
 ├── src/
 │   ├── bin/              # Executable entry points
+│   │   ├── pi-audio-engine.cpp   # Main engine (reads input.raw, writes ALSA + monitors)
+│   │   ├── pi-audio-apply.cpp    # Config apply adapter
+│   │   ├── pi-audio-status.cpp   # Status probe adapter
+│   │   ├── pi-audio-test.cpp     # Speaker test adapter (writes whitenoise to input.raw)
+│   │   └── pi-audio-measure.cpp  # Room measurement adapter
 │   ├── lib/
-│   │   ├── core/         # Engine, config manager, logger
+│   │   ├── core/         # Engine, config manager, logger, monitor ring buffer
+│   │   │   ├── engine.cpp        # AudioEngine class (playback thread, DSP pipeline)
+│   │   │   ├── config.cpp        # ConfigManager (JSON config loading)
+│   │   │   ├── logger.cpp        # Logger with rotation (1MB max, 3 backups)
+│   │   │   └── monitor.cpp       # Per-channel monitor ring buffer writer
 │   │   └── adapters/     # Web interface adapters
+│   │       ├── apply.cpp         # Validates config, writes reload trigger, polls confirmation
+│   │       ├── status.cpp        # Reads engine state file
+│   │       ├── test.cpp          # Writes whitenoise to input ring buffer
+│   │       └── measure.cpp       # Room measurement (stub)
 │   └── include/
 │       ├── core/         # Headers
 │       └── utils/        # JSON parser
@@ -66,7 +81,7 @@ pi-audio-dsp/
 ├── CMakeLists.txt
 ├── deploy.sh             # Production deploy script
 ├── deploy-vm.sh          # VM deploy script
-├── redeploy.sh           # Quick redeploy (binaries + restart)
+├── redeploy.sh           # Quick redeploy (stops engine, copies binaries, restarts)
 └── pi-audio-engine.service
 ```
 
@@ -74,11 +89,48 @@ pi-audio-dsp/
 
 | Binary | Purpose |
 |---|---|
-| `pi-audio-engine` | Main audio engine service |
-| `pi-audio-apply` | Apply configuration adapter — writes reload trigger |
-| `pi-audio-status` | Status probe adapter — reads engine state file |
-| `pi-audio-measure` | Room measurement adapter |
-| `pi-audio-test` | Speaker test adapter |
+| `pi-audio-engine` | Main audio engine service — reads input.raw, processes DSP, writes ALSA + per-channel monitor buffers |
+| `pi-audio-apply` | Apply configuration adapter — validates config, writes reload trigger, polls engine-state.json for confirmation (up to 5s) |
+| `pi-audio-status` | Status probe adapter — reads engine state file and reports connection status |
+| `pi-audio-measure` | Room measurement adapter (not yet implemented) |
+| `pi-audio-test` | Speaker test adapter — writes 3 seconds of whitenoise to input ring buffer for the requested driver |
+
+### Supported Test Drivers
+
+| Driver | Monitor Channel |
+|---|---|
+| `PGM_L` | `pgm-l` |
+| `PGM_R` | `pgm-r` |
+| `Woofer_L` | `woofer-l` |
+| `Tweeter_L` | `tweeter-l` |
+| `Woofer_R` | `woofer-r` |
+| `Tweeter_R` | `tweeter-r` |
+| `Mic` | `mic` |
+
+## Engine Architecture
+
+### Playback Thread
+
+The engine runs a single playback thread that loops at real-time pace:
+
+1. **Sleep** for buffer duration (`bufferSize / sampleRate` seconds, e.g. 10.7ms for 512 frames at 48kHz)
+2. **Read** mono float32 samples from `input.raw` ring buffer
+3. **Convert** mono to stereo (duplicate to both channels)
+4. **Process** DSP pipeline (volume/mute + extensible stages)
+5. **Write** stereo float32 to ALSA PCM device
+6. **Write** left channel to `monitor-pgm-l.raw`, right channel to `monitor-pgm-r.raw`
+
+### Real-Time Pacing
+
+The playback thread uses per-cycle sleep pacing to maintain real-time speed. This is required because null ALSA devices (used in VMs) return instantly from `snd_pcm_writei()`, which would cause the loop to run at CPU speed instead of audio rate.
+
+### Input Ring Buffer
+
+The engine reads from `/run/pi-audio/input.raw` (4MB mono float32 ring buffer). On startup, the engine's internal read position syncs to the current write position to avoid consuming stale data from a previous session.
+
+### Monitor Ring Buffers
+
+The engine creates per-channel monitor buffers on startup (`monitor-pgm-l.raw`, `monitor-pgm-r.raw`). Each is a 4MB mono float32 ring buffer with a 64-byte header. The webapp reads these via `audio-chunk.php` or `audio-stream.php`.
 
 ## Configuration
 
@@ -92,6 +144,7 @@ The engine does not poll the config file. Instead, the apply adapter signals the
 2. Apply adapter validates config, writes `/run/pi-audio/reload`
 3. Engine detects trigger file in its main loop (checked every second)
 4. Engine reloads config from `current.json`, applies changes, removes trigger
+5. Apply adapter polls `/run/pi-audio/engine-state.json` for up to 5 seconds, confirming the engine reports the new sampleRate and BufferSize
 
 Volume and mute changes are applied atomically without restart. Sample rate, buffer size, or device changes require the engine to stop and reinitialize.
 
@@ -112,10 +165,14 @@ The status adapter reads this file and merges it with the connection status. The
 | `/run/pi-audio/status` | Engine running flag (created on start, removed on stop) |
 | `/run/pi-audio/engine-state.json` | Current engine parameters (written every second) |
 | `/run/pi-audio/reload` | Reload trigger (written by apply adapter, consumed by engine) |
+| `/run/pi-audio/input.raw` | Input ring buffer (4MB mono float32, test writes → engine reads) |
+| `/run/pi-audio/monitor-{channel}.raw` | Per-channel monitor ring buffers (4MB mono float32, engine writes → webapp reads) |
 
 ## Logging
 
-Logs written to `/var/log/pi-audio/engine.log`.
+Logs written to `/var/log/pi-audio/engine.log` with automatic rotation:
+- **Max size:** 1 MB per file
+- **Backups:** 3 rotated files (`engine.log.1`, `.2`, `.3`)
 
 ## Debugging
 
@@ -133,6 +190,9 @@ cat /run/pi-audio/engine-state.json
 
 # Test status adapter
 /usr/local/bin/pi-audio-status
+
+# Speaker test (writes whitenoise to input buffer)
+/usr/local/bin/pi-audio-test PGM_L
 
 # ALSA devices
 aplay -l
@@ -165,3 +225,7 @@ For the engine (running as the current user) and Apache (`www-data`) to share ru
 - `/var/log/pi-audio/` must be owned by the engine user with group `audio`
 - Config files must be `664` (not `660`) so the engine can read them
 - `www-data` must be in the `audio` group
+- Engine user must be in the `audio` group (for directory write access):
+  ```bash
+  sudo usermod -aG audio $USER
+  ```

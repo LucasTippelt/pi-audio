@@ -54,7 +54,7 @@ git push origin master
 
 **Single developer (Pi as dev + deploy host):** VS Code connects to the Pi via SSH, editing files directly on the device.
 
-**Multiple developers:** Each developer clones the repo locally, works on `testing`, and pushes to GitHub. The Pi pulls from `testing` to deploy, avoiding concurrent editing conflicts.
+**Multiple developers:** Each developer clones the repo locally, works on `staging`, and pushes to GitHub. The Pi pulls from `staging` to deploy, avoiding concurrent editing conflicts.
 
 **VPN:** If the Pi is remote, use WireGuard or Tailscale for secure SSH access without exposing router ports.
 
@@ -79,16 +79,26 @@ Set up Kilo Code on the Pi with a local LLM hosted on a workstation (e.g., GPU m
 /var/www/pi-audio/
 ├── pi-audio-dsp/               # DSP engine (C++, CMake, ALSA)
 │   ├── src/
+│   │   ├── bin/                # Executable entry points
+│   │   ├── lib/
+│   │   │   ├── core/           # Engine, config, logger, monitor ring buffers
+│   │   │   └── adapters/       # Web interface adapters (apply, status, test, measure)
+│   │   └── include/
+│   │       ├── core/           # Headers (engine, config, logger, monitor)
+│   │       └── utils/          # JSON parser (header-only)
 │   ├── overrides/              # VM systemd overrides
 │   ├── deploy.sh               # Production deploy
 │   ├── deploy-vm.sh            # VM deploy
-│   ├── redeploy.sh             # Quick redeploy
+│   ├── redeploy.sh             # Quick redeploy (stops engine, copies binaries, restarts)
 │   └── pi-audio-engine.service
 ├── pi-audio-web/               # Web interface (PHP, Apache)
-│   ├── api.php
-│   ├── index.php
-│   ├── debug.php
-│   └── assets/
+│   ├── api.php                 # REST API
+│   ├── index.php               # Main UI
+│   ├── debug.php               # System debug page
+│   ├── audio-debug.html        # Real-time audio monitor
+│   ├── audio-stream.php        # Legacy streaming endpoint (long-lived connection)
+│   ├── audio-chunk.php         # Chunked audio endpoint (fixed-size requests)
+│   └── assets/                 # CSS, JS, static assets
 └── README.md
 ```
 
@@ -106,29 +116,99 @@ Builds the DSP engine, installs binaries, configures Apache, and sets up the sys
 ### VM / Development
 
 ```bash
-cd /var/www/pi-audio/pi-audio-dsp
-sudo bash deploy-vm.sh
+# Build (use temp directory if build/ is owned by root)
+mkdir /tmp/pi-audio-build && cd /tmp/pi-audio-build
+cmake /var/www/pi-audio/pi-audio-dsp
+make -j$(nproc)
+
+# Deploy
+sudo bash /var/www/pi-audio/pi-audio-dsp/redeploy.sh
 ```
 
-Uses the current user instead of `pi:audio`, installs the VM systemd override, and configures shared runtime directories.
+The redeploy script stops the engine, copies binaries from `/tmp/pi-audio-build/`, reinstalls the service, fixes permissions, and restarts the engine.
 
 ## Services
 
 - **pi-audio-engine** — Main audio engine (systemd service)
 - **Apache** — Web interface on port 80
 
-## Engine Communication
+## Architecture
+
+### Audio Data Flow
+
+```
+Test adapter (pi-audio-test)
+    │ writes whitenoise
+    ▼
+input.raw (4MB ring buffer)
+    │ engine reads
+    ▼
+AudioEngine playback thread
+    │ mono-to-stereo, DSP (volume/mute/stages)
+    ├──► ALSA PCM (actual speakers)
+    ├──► monitor-pgm-l.raw (left program output)
+    └──► monitor-pgm-r.raw (right program output)
+              │
+              ▼ webapp reads
+       audio-chunk.php / audio-stream.php
+              │
+              ▼
+       audio-debug.html (Web Audio API playback + waveform)
+```
+
+### Engine Communication
 
 The engine and web UI communicate through files in `/run/pi-audio/`:
 
-- **`status`** — Engine running flag
-- **`engine-state.json`** — Current engine parameters (written every second)
-- **`reload`** — Reload trigger (written by apply adapter, consumed by engine)
+| File | Purpose |
+|---|---|
+| `status` | Engine running flag (created on start, removed on stop) |
+| `engine-state.json` | Current engine parameters (written every second) |
+| `reload` | Reload trigger (written by apply adapter, consumed by engine) |
+| `input.raw` | Input ring buffer (4MB mono float32, test writes → engine reads) |
+| `monitor-{channel}.raw` | Per-channel monitor ring buffers (4MB mono float32, engine writes → webapp reads) |
+
+### Ring Buffer Format
+
+All ring buffers use a 64-byte header followed by raw float32 data:
+
+**Input buffer (`PIAI` magic):**
+- `magic[4]` = "PIAI"
+- `version[2]`
+- `writePos[8]` — byte offset of next write (0..dataSize-1)
+- `sampleRate[4]` — Hz
+- `channels[2]` — always 1 (mono)
+- `seq[4]` — monotonically increasing write sequence counter
+- `channelName[16]` — null-terminated identifier
+- `reserved[20]`
+
+**Monitor buffers (`PIAM` magic):** Same layout, magic "PIAM".
+
+Supported monitor channels: `pgm-l`, `pgm-r`, `woofer-l`, `tweeter-l`, `woofer-r`, `tweeter-r`, `mic`.
 
 ## Config
 
 - `/etc/pi-audio/config/current.json` — Active configuration
 - `/etc/pi-audio/presets/` — Saved presets
+
+### Hot Reload (Trigger File)
+
+The engine does not poll the config file. Instead, the apply adapter signals the engine to reload:
+
+1. Web UI calls `PI_AUDIO_APPLY_BIN` with new config
+2. Apply adapter validates config, writes `/run/pi-audio/reload`
+3. Engine detects trigger file in its main loop (checked every second)
+4. Engine reloads config from `current.json`, applies changes, removes trigger
+5. Apply adapter polls `/run/pi-audio/engine-state.json` for up to 5 seconds, confirming the engine reports the new parameters
+
+Volume and mute changes are applied atomically without restart. Sample rate, buffer size, or device changes require the engine to stop and reinitialize.
+
+## Logging
+
+Logs written to `/var/log/pi-audio/engine.log` with automatic rotation:
+- **Max size:** 1 MB per file
+- **Backups:** 3 rotated files (`engine.log.1`, `.2`, `.3`)
+- Older backups are overwritten on rotation
 
 ## Dependencies
 
@@ -157,13 +237,24 @@ arecord -l
 # Engine state
 cat /run/pi-audio/engine-state.json
 /usr/local/bin/pi-audio-status
+
+# Monitor ring buffers
+ls -la /run/pi-audio/monitor-*.raw
+
+# Speaker test
+/usr/local/bin/pi-audio-test PGM_L
 ```
+
+### Debug Pages
+
+- **`/debug.php`** — Full system debug: environment, permissions, binary runtime status (running PIDs, last run time, success/error), monitor ring buffer header, engine state vs config comparison, auto-refreshes every 5 seconds
+- **`/audio-debug.html`** — Real-time audio monitor: fetches fixed-size audio chunks via `audio-chunk.php`, plays through Web Audio API, waveform visualization, channel selection, auto-detects engine sample rate
 
 ## Roadmap
 
 | Phase | Features |
 |---|---|
-| Phase 1 | ALSA PCM playback, volume/mute, sample rate/buffer size, web interface adapters |
-| Phase 2 | DSP effects (EQ, crossover, delay) |
-| Phase 3 | Room measurement and correction |
-| Phase 4 | Multi-channel support (4 outputs, 6 inputs) |
+| Phase 1 | ALSA PCM playback, volume/mute, sample rate/buffer size, web interface adapters, monitor ring buffer, audio debug page |
+| Phase 2 | DSP effects (EQ, crossover, delay, trim, phase inversion) |
+| Phase 3 | Room measurement and correction (mic input, RTA, impulse response) |
+| Phase 4 | Multi-channel support (4 outputs, 6 inputs), per-channel monitoring |
