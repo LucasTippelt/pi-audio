@@ -1,6 +1,7 @@
 #include "core/engine.h"
 #include "core/logger.h"
 #include "core/monitor.h"
+#include "core/tcp_relay.h"
 #include <alsa/asoundlib.h>
 #include <cmath>
 #include <cstring>
@@ -22,7 +23,9 @@ struct MonitorPersist {
     uint64_t writePosL = 0;
     uint64_t writePosR = 0;
     bool initialized = false;
-    std::vector<float> monoBuf;
+    std::vector<float> accumL;
+    std::vector<float> accumR;
+    size_t flushThreshold = 9600; // 200ms at 48kHz
 
     void open() {
         if (initialized) return;
@@ -32,6 +35,8 @@ struct MonitorPersist {
         fpR = nullptr;
         writePosL = 0;
         writePosR = 0;
+        accumL.clear();
+        accumR.clear();
 
         fpL = std::fopen(monitorChannelPath("pgm-l").c_str(), "r+b");
         fpR = std::fopen(monitorChannelPath("pgm-r").c_str(), "r+b");
@@ -57,14 +62,63 @@ struct MonitorPersist {
     }
 
     void close() {
+        flush();
         if (fpL) { std::fclose(fpL); fpL = nullptr; }
         if (fpR) { std::fclose(fpR); fpR = nullptr; }
+        accumL.clear();
+        accumR.clear();
         initialized = false;
+    }
+
+    void writeChannel(FILE* fp, uint64_t& writePos, const float* data, size_t frames) {
+        size_t totalBytes = frames * sizeof(float);
+        size_t pos = writePos;
+        std::fseek(fp, 64 + (pos % kInputDataSize), SEEK_SET);
+        if (pos + totalBytes <= kInputDataSize) {
+            std::fwrite(data, sizeof(float), frames, fp);
+        } else {
+            size_t first = (kInputDataSize - (pos % kInputDataSize)) / sizeof(float);
+            std::fwrite(data, sizeof(float), first, fp);
+            std::fseek(fp, 64, SEEK_SET);
+            std::fwrite(data + first, sizeof(float), frames - first, fp);
+        }
+        writePos = (pos + totalBytes) % kInputDataSize;
+        // Update header writePos and seq
+        char hdr[64];
+        std::fseek(fp, 0, SEEK_SET);
+        std::fread(hdr, 1, 64, fp);
+        uint32_t low = (uint32_t)writePos;
+        uint32_t high = (uint32_t)(writePos >> 32);
+        std::memcpy(hdr + 6, &low, 4);
+        std::memcpy(hdr + 10, &high, 4);
+        uint32_t seq = 0;
+        std::memcpy(&seq, hdr + 20, 4);
+        seq++;
+        std::memcpy(hdr + 20, &seq, 4);
+        std::fseek(fp, 0, SEEK_SET);
+        std::fwrite(hdr, 1, 64, fp);
+        std::fflush(fp);
+    }
+
+    void flush() {
+        if (fpL && !accumL.empty()) {
+            writeChannel(fpL, writePosL, accumL.data(), accumL.size());
+            accumL.clear();
+        }
+        if (fpR && !accumR.empty()) {
+            writeChannel(fpR, writePosR, accumR.data(), accumR.size());
+            accumR.clear();
+        }
     }
 };
 
 static MonitorPersist& monitorPersist() {
     static MonitorPersist inst;
+    return inst;
+}
+
+static TcpRelay& tcpRelay() {
+    static TcpRelay inst;
     return inst;
 }
 
@@ -144,6 +198,12 @@ bool AudioEngine::initialize(const EngineConfig& config) {
     monitorInit("pgm-r", config.sampleRate);
     monitorClose();
 
+    /* Connect TCP relay for real-time monitor streaming */
+    tcpRelay().disconnect();
+    if (!tcpRelay().connect("127.0.0.1", 8766)) {
+        Logger::getInstance().warning("TcpRelay: initial connect failed (will retry on first push)");
+    }
+
     Logger::getInstance().info("Engine initialized: " +
                                 std::to_string(config.sampleRate) + " Hz, " +
                                 std::to_string(config.bufferSize) + " frames, " +
@@ -164,6 +224,7 @@ void AudioEngine::stop() {
         m_thread.join();
     }
     monitorPersist().close();
+    tcpRelay().disconnect();
 }
 
 /* Read mono samples from input ring buffer file.
@@ -242,7 +303,8 @@ static size_t readInputFile(float* buffer, size_t maxFrames) {
 }
 
 /* Write processed stereo audio to PGM monitor buffers.
- * Persistent file handles to avoid open/close I/O every buffer period.
+ * Accumulates frames in memory, flushes to disk when threshold is reached
+ * to reduce I/O frequency and produce larger chunks for the WebSocket server.
  * Phase 1: writes to pgm-l and pgm-r only.
  * Phase 2: will split by crossover (woofer/tweeter per side). */
 static void writeMonitorBuffers(const float* stereo, size_t frames) {
@@ -253,54 +315,14 @@ static void writeMonitorBuffers(const float* stereo, size_t frames) {
             std::string(mp.fpL ? "yes" : "NO") + " fpR=" + std::string(mp.fpR ? "yes" : "NO"));
     }
 
-    const size_t kDataSize = 4 * 1024 * 1024;
-    const size_t kHeaderSize = 64;
+    mp.accumL.reserve(mp.accumL.size() + frames);
+    for (size_t i = 0; i < frames; ++i) {
+        mp.accumL.push_back(stereo[i * 2]);
+        mp.accumR.push_back(stereo[i * 2 + 1]);
+    }
 
-    if (mp.monoBuf.size() < frames) mp.monoBuf.resize(frames);
-
-    auto writeMono = [&](FILE* fp, size_t chOffset, uint64_t& writePos) {
-        if (!fp) return;
-        for (size_t i = 0; i < frames; ++i) mp.monoBuf[i] = stereo[i * 2 + chOffset];
-
-        size_t totalBytes = frames * sizeof(float);
-        size_t pos = writePos;
-        std::fseek(fp, static_cast<long>(kHeaderSize + pos), SEEK_SET);
-
-        if (pos + totalBytes <= kDataSize) {
-            std::fwrite(mp.monoBuf.data(), 1, totalBytes, fp);
-        } else {
-            size_t first = kDataSize - pos;
-            std::fwrite(mp.monoBuf.data(), 1, first, fp);
-            std::fseek(fp, static_cast<long>(kHeaderSize), SEEK_SET);
-            std::fwrite(mp.monoBuf.data() + (first / sizeof(float)), 1, totalBytes - first, fp);
-        }
-        writePos = (pos + totalBytes) % kDataSize;
-
-        std::fseek(fp, 0, SEEK_SET);
-        char hdr[64];
-        std::fread(hdr, 1, 64, fp);
-        uint32_t wLo = (uint32_t)(writePos & 0xFFFFFFFF);
-        uint32_t wHi = (uint32_t)(writePos >> 32);
-        std::memcpy(hdr + 6, &wLo, 4);
-        std::memcpy(hdr + 10, &wHi, 4);
-        uint32_t seq = 0;
-        std::memcpy(&seq, hdr + 20, 4);
-        seq++;
-        std::memcpy(hdr + 20, &seq, 4);
-        std::fseek(fp, 0, SEEK_SET);
-        std::fwrite(hdr, 1, 64, fp);
-        std::fflush(fp);
-    };
-
-    writeMono(mp.fpL, 0, mp.writePosL);
-    writeMono(mp.fpR, 1, mp.writePosR);
-
-    static size_t monDebugCount = 0;
-    if (++monDebugCount % 100 == 0) {
-        Logger::getInstance().debug("writeMonitorBuffers: writePosL=" +
-            std::to_string(mp.writePosL) + " writePosR=" + std::to_string(mp.writePosR) +
-            " fpL=" + std::string(mp.fpL ? "ok" : "null") +
-            " fpR=" + std::string(mp.fpR ? "ok" : "null"));
+    if (mp.accumL.size() >= mp.flushThreshold) {
+        mp.flush();
     }
 }
 
@@ -317,6 +339,7 @@ void AudioEngine::playbackThread() {
 
         /* Read from input ring buffer file; if empty, use silence. */
         size_t inputFrames = readInputFile(buffer.data(), m_config.bufferSize);
+        bool hasInput = (inputFrames > 0);
         if (inputFrames == 0) {
             std::memset(buffer.data(), 0, buffer.size() * sizeof(float));
             inputFrames = m_config.bufferSize;
@@ -345,6 +368,9 @@ void AudioEngine::playbackThread() {
 
         /* Write processed audio to PGM monitor buffers. */
         writeMonitorBuffers(buffer.data(), inputFrames);
+
+        /* Push stereo data to TCP relay for WebSocket streaming */
+        tcpRelay().push(buffer.data(), inputFrames);
     }
 }
 

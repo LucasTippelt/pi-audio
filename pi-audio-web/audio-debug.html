@@ -112,10 +112,13 @@
     let srRefreshTimer = null;
     let ws = null;
     let wsReconnectTimer = null;
-    let audioAccum = new Uint8Array(0);
     let wsConnectTime = 0;
     let wsBytesTotal = 0;
-    const accumTargetMs = 400;
+    let accumData = null;
+    let accumLen = 0;
+    let scheduling = false;
+    const startupMs = 300;
+
     const WS_HOST = location.hostname || 'localhost';
     const WS_PORT = 8765;
     const WS_PROTO = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -148,7 +151,6 @@
     }
 
     function buildAndSchedule(floats, frameCount) {
-      /* Update waveform and RMS. */
       let rmsSum = 0;
       const scanLen = Math.min(frameCount, 2048);
       for (let i = 0; i < scanLen; i++) {
@@ -159,23 +161,51 @@
       document.getElementById('m-rms').textContent =
         (20 * Math.log10(Math.max(1e-10, rms))).toFixed(1) + ' dB';
 
+      if (!scheduling) {
+        if (!accumData) accumData = new Float32Array(Math.ceil(startupMs / 1000 * sampleRate));
+        for (let i = 0; i < frameCount && accumLen + i < accumData.length; i++) {
+          accumData[accumLen + i] = floats[i];
+        }
+        accumLen = Math.min(accumLen + frameCount, accumData.length);
+        const pct = Math.min(100, (accumLen / accumData.length * 100)).toFixed(0);
+        setStatus('Buffering ' + pct + '%', 'active');
+        if (accumLen >= accumData.length) {
+          scheduling = true;
+          scheduledEnd = audioCtx.currentTime + 0.1;
+          const buf = audioCtx.createBuffer(1, accumLen, sampleRate);
+          buf.getChannelData(0).set(accumData);
+          scheduleBuffer(buf);
+          accumData = null;
+          accumLen = 0;
+        }
+        chunkCount++;
+        document.getElementById('m-chunks').textContent = chunkCount;
+        document.getElementById('m-ch').textContent = '1';
+        return;
+      }
+
       const buf = audioCtx.createBuffer(1, frameCount, sampleRate);
       const chData = buf.getChannelData(0);
       for (let i = 0; i < frameCount; i++) {
         chData[i] = floats[i] || 0;
       }
       scheduleBuffer(buf);
+      chunkCount++;
+      document.getElementById('m-chunks').textContent = chunkCount;
+      document.getElementById('m-ch').textContent = '1';
     }
 
     function startStream() {
       if (running) return;
       running = true;
-      scheduledEnd = 0;
       chunkCount = 0;
       dropCount = 0;
       lastDataTime = 0;
       waveData.fill(0);
       streamChannels = 1;
+      accumData = null;
+      accumLen = 0;
+      scheduling = false;
 
       document.getElementById('btn-start').disabled = true;
       document.getElementById('btn-stop').disabled = false;
@@ -200,7 +230,10 @@
     function initAudio(sr) {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: sr });
       if (audioCtx.state === 'suspended') audioCtx.resume();
-      scheduledEnd = audioCtx.currentTime + 1.5;
+      audioCtx.addEventListener('statechange', () => {
+        console.log('[WS] AudioContext state:', audioCtx.state);
+      });
+      scheduledEnd = audioCtx.currentTime;
 
       const canvas = document.getElementById('waveform');
       const ctx2d = canvas.getContext('2d');
@@ -284,8 +317,14 @@
         return;
       }
 
-      audioAccum = new Uint8Array(0);
       wsBytesTotal = 0;
+      scheduledEnd = audioCtx ? audioCtx.currentTime + 0.2 : 0;
+      chunkCount = 0;
+      dropCount = 0;
+      waveData.fill(0);
+      accumData = null;
+      accumLen = 0;
+      scheduling = false;
       const wsUrl = WS_PROTO + '://' + WS_HOST + ':' + WS_PORT + '/?ch=' + encodeURIComponent(ch);
       console.log('[WS] Connecting to', wsUrl);
       ws = new WebSocket(wsUrl);
@@ -297,7 +336,7 @@
         setStatus('Streaming audio (WS)...', 'active');
       };
 
-      ws.onmessage = (event) => {
+       ws.onmessage = (event) => {
         try {
           console.log('[WS] msg type=' + (event.data instanceof ArrayBuffer ? 'arraybuffer' : typeof event.data) + ' size=' + (event.data ? event.data.byteLength || event.data.length : 0));
           lastDataTime = performance.now();
@@ -309,22 +348,13 @@
         const kb = (wsBytesTotal / 1024).toFixed(1);
         setStatus(`Streaming (${kb} kB / ${elapsed}s)`, 'active');
 
-        const newAccum = new Uint8Array(audioAccum.length + buf.byteLength);
-        newAccum.set(audioAccum, 0);
-        newAccum.set(new Uint8Array(buf), audioAccum.length);
-        audioAccum = newAccum;
-
-        const targetBytes = Math.floor(sampleRate * accumTargetMs / 1000 * 4);
-        while (audioAccum.length >= targetBytes) {
-          const takeBytes = targetBytes;
-          const takeFrames = Math.floor(takeBytes / 4);
-          const floats = new Float32Array(audioAccum.buffer, audioAccum.byteOffset, takeFrames);
-          buildAndSchedule(floats, takeFrames);
-          chunkCount++;
-          document.getElementById('m-chunks').textContent = chunkCount;
-          document.getElementById('m-ch').textContent = '1';
-          audioAccum = audioAccum.slice(takeBytes);
-        }
+        const frameCount = Math.floor(buf.byteLength / 4);
+        if (frameCount < 1) return;
+        const floats = new Float32Array(buf, 0, frameCount);
+        buildAndSchedule(floats, frameCount);
+        chunkCount++;
+        document.getElementById('m-chunks').textContent = chunkCount;
+        document.getElementById('m-ch').textContent = '1';
         } catch(e) { console.error('[WS] onmessage error:', e); }
       };
 
@@ -336,16 +366,9 @@
       };
 
       ws.onclose = (event) => {
-        console.log('[WS] Closed code=' + event.code + ' reason=' + (event.reason || '(none)') + ' clean=' + event.wasClean);
+        console.log('[WS] Closed code=' + event.code + ' clean=' + event.wasClean + ' queue=' + queueTimeMs.toFixed(0) + 'ms chunks=' + chunkCount + ' audioCtx=' + (audioCtx ? audioCtx.state : 'null'));
         if (!running) return;
-        if (event.wasClean) {
-          setStatus('WebSocket closed (code ' + event.code + '), reconnecting...', 'active');
-        } else {
-          setStatus('WebSocket dropped, reconnecting...', 'error');
-        }
-        wsReconnectTimer = setTimeout(() => {
-          if (running) connectWebSocket();
-        }, 1000);
+        setStatus('WebSocket disconnected (code ' + event.code + '), click Start to reconnect', 'error');
       };
     }
 
@@ -369,8 +392,7 @@
         setStatus('Channel changed, reconnecting...', 'active');
         if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
         if (ws) { try { ws.close(); } catch(e) {} ws = null; }
-        audioAccum = new Uint8Array(0);
-        scheduledEnd = audioCtx.currentTime + 1.5;
+      scheduledEnd = audioCtx.currentTime + 0.2;
         chunkCount = 0;
         dropCount = 0;
         waveData.fill(0);

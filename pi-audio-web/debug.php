@@ -95,6 +95,39 @@ session_start();
   }
   echo "</table>\n";
 
+  // ---- VERSIONS ----
+  sectionHeading('Build Versions');
+  echo "<table>\n";
+  $versionFile = __DIR__ . '/VERSION.json';
+  $webVersion = '(not generated)';
+  $webBuildTime = '-';
+  if (is_file($versionFile)) {
+      $vdata = json_decode(file_get_contents($versionFile), true);
+      if (is_array($vdata)) {
+          $webVersion = $vdata['version'] ?? '?';
+          $webBuildTime = $vdata['buildTime'] ?? '-';
+      }
+  }
+  row('Web / WS Server', "$webVersion ($webBuildTime)", is_file($versionFile) ? 'ok' : 'warn');
+
+  /* Engine version from engine-state.json */
+  $engineStatePath = '/run/pi-audio/engine-state.json';
+  $engineVersion = '(not running)';
+  if (is_file($engineStatePath)) {
+      $es = json_decode(file_get_contents($engineStatePath), true);
+      if (is_array($es) && isset($es['version'])) {
+          $engineVersion = $es['version'];
+      }
+  }
+  row('Audio Engine', $engineVersion, $engineVersion !== '(not running)' ? 'ok' : 'warn');
+
+  /* Check if versions match */
+  if ($webVersion !== '(not generated)' && $engineVersion !== '(not running)') {
+      $match = ($webVersion === $engineVersion);
+      row('Version Match', $match ? 'Yes' : 'MISMATCH', $match ? 'ok' : 'err');
+  }
+  echo "</table>\n";
+
   // ---- PHP INFO ----
   sectionHeading('PHP / Server');
   echo "<table>\n";

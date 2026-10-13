@@ -8,7 +8,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(ALSA REQUIRED alsa)
 
-# Include directories
+# Include directories (build dir for generated headers)
+include_directories(${CMAKE_BINARY_DIR})
 include_directories(${CMAKE_SOURCE_DIR}/src/include)
 include_directories(${ALSA_INCLUDE_DIRS})
 
@@ -18,6 +19,7 @@ add_library(audio_core
     src/lib/core/config.cpp
     src/lib/core/logger.cpp
     src/lib/core/monitor.cpp
+    src/lib/core/tcp_relay.cpp
     src/lib/adapters/apply.cpp
     src/lib/adapters/measure.cpp
     src/lib/adapters/status.cpp
@@ -25,6 +27,14 @@ add_library(audio_core
 )
 target_link_libraries(audio_core ${ALSA_LIBRARIES})
 target_include_directories(audio_core PUBLIC ${CMAKE_SOURCE_DIR}/src/include)
+
+# Generate version info (must run before audio_core compiles)
+add_custom_target(gen_version
+    COMMAND ${CMAKE_SOURCE_DIR}/scripts/gen-version.sh ${CMAKE_BINARY_DIR}
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Generating version info"
+)
+add_dependencies(audio_core gen_version)
 
 # Binaries
 add_executable(pi-audio-engine src/bin/pi-audio-engine.cpp)

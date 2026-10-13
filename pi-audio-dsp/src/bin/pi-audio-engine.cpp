@@ -1,6 +1,7 @@
 #include "core/engine.h"
 #include "core/config.h"
 #include "core/logger.h"
+#include "version_generated.h"
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -19,13 +20,14 @@ static void writeEngineState() {
     auto cfg = g_engine->getCurrentConfig();
     std::ostringstream json;
     json << "{"
-         << "\"input\":\"" << cfg.input << "\","
-         << "\"output\":\"" << cfg.output << "\","
-         << "\"sampleRate\":" << cfg.sampleRate << ","
-         << "\"BufferSize\":" << cfg.bufferSize << ","
-         << "\"volume\":" << g_engine->getVolume() << ","
-         << "\"muted\":" << (g_engine->isMuted() ? "true" : "false")
-         << "}";
+          << "\"version\":\"" << PI_AUDIO_VERSION << "\","
+          << "\"input\":\"" << cfg.input << "\","
+          << "\"output\":\"" << cfg.output << "\","
+          << "\"sampleRate\":" << cfg.sampleRate << ","
+          << "\"BufferSize\":" << cfg.bufferSize << ","
+          << "\"volume\":" << g_engine->getVolume() << ","
+          << "\"muted\":" << (g_engine->isMuted() ? "true" : "false")
+          << "}";
     const char* tmpPath = "/run/pi-audio/engine-state.json.tmp";
     const char* finalPath = "/run/pi-audio/engine-state.json";
     FILE* f = fopen(tmpPath, "w");
@@ -108,7 +110,7 @@ int main(int argc, char* argv[]) {
     g_configFile = configFile;
 
     Logger::getInstance().init(logFile, LogLevel::DEBUG, 1024 * 1024, 3);
-    Logger::getInstance().info("Starting Pi Audio Engine");
+    Logger::getInstance().info("Pi Audio Engine v" + std::string(PI_AUDIO_VERSION) + " built " + std::string(PI_AUDIO_BUILD_TIME));
 
     // Load configuration
     auto configManager = ConfigManager::instance();
