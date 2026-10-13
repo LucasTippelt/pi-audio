@@ -58,6 +58,31 @@ git push origin master
 
 **VPN:** If the Pi is remote, use WireGuard or Tailscale for secure SSH access without exposing router ports.
 
+### Versioning
+
+Version format: `vX.Y.Z.UIO` (e.g. `v1.3.0.0`)
+
+| Component | Meaning |
+|---|---|
+| `X` | Major release (auto-incremented on push to `master`) |
+| `Y` | Staging release (auto-incremented on push to `staging`) |
+| `Z` | Minor version (manual bump by user) |
+| `UIO` | Build iteration (auto-incremented by `gen-version.sh` on each build) |
+
+Defined in `VERSION` (line 1 = `X.Y.Z`, line 2 = `UIO`, optional).
+
+The pre-push hook auto-increments `Y` on staging pushes and `X` on master pushes. To manually bump the minor version (`Z`) and reset `UIO` to 0:
+
+```bash
+# Increment Z by 1 (e.g., 1.3.0 → 1.3.1)
+./bump-version.sh
+
+# Set Z to a specific value (e.g., 1.3.0 → 1.3.5)
+./bump-version.sh 5
+```
+
+Commit the VERSION change, then push — the pre-push hook will apply the final bump.
+
 ### Remote AI development (optional)
 
 Set up Kilo Code on the Pi with a local LLM hosted on a workstation (e.g., GPU machine):
@@ -101,6 +126,8 @@ Set up Kilo Code on the Pi with a local LLM hosted on a workstation (e.g., GPU m
 │   ├── audio-stream.php        # Legacy streaming endpoint (long-lived connection)
 │   ├── audio-chunk.php         # Chunked audio endpoint (fixed-size requests)
 │   └── assets/                 # CSS, JS, static assets
+├── VERSION                     # Version file (line 1 = X.Y.Z, line 2 = UIO)
+├── bump-version.sh             # Helper: bump minor version (Z) and reset UIO to 0
 └── README.md
 ```
 
@@ -202,11 +229,13 @@ AudioEngine playback thread
 
 Real-time audio monitoring uses a direct TCP + WebSocket pipeline instead of file-based polling:
 
-1. **Engine (TcpRelay)**: After each DSP processing cycle, stereo float32 data is pushed to a non-blocking TCP client that buffers and sends data to `127.0.0.1:8766`
-2. **Node.js relay server** (`ws-audio-server-node.js`): Accepts TCP connection from engine, splits stereo into L/R mono, broadcasts to WebSocket clients per channel
-3. **Browser** (`audio-debug.html`): Connects via WebSocket, accumulates a startup buffer (~300ms), then schedules audio through Web Audio API for smooth playback
+1. **Engine (TcpRelay)**: After each DSP processing cycle, per-channel mono float32 data is pushed to a non-blocking TCP client. Channel enable/disable control (`E <ch>\n` / `D <ch>\n`) is sent from WS server to engine over TCP. Only enabled channels are relayed.
+2. **Node.js relay server** (`ws-audio-server-node.js`): Accepts TCP connection from engine, broadcasts to WebSocket clients per channel. Pre-allocated 64KB buffer with `copyWithin` replaces `Buffer.concat` to reduce GC pressure.
+3. **Browser** (`audio-debug.html`): Connects via WebSocket, 200ms ring buffer with 50ms warmup, plays through Web Audio API (ScriptProcessorNode bufSize=256), waveform visualization uses `copyWithin` to avoid GC storms.
 
-**Protocol** (TCP engine → Node.js): `[4 bytes BE sample count][sampleCount × 8 bytes interleaved stereo float32]`
+**Protocol** (TCP engine → Node.js): `[1 byte channel ID][4 bytes BE sample count][sampleCount × 4 bytes mono float32]`
+
+**Channel Control** (TCP Node.js → engine): `E <ch>\n` to enable channel, `D <ch>\n` to disable. Only enabled channels are processed and relayed.
 
 **Fallback**: Engine still writes monitor ring buffer files for backward compatibility with `audio-chunk.php` and `audio-stream.php`.
 
@@ -351,7 +380,7 @@ curl http://localhost:8765/version
 ### Debug Pages
 
 - **`/debug.php`** — Full system debug: build versions, environment, permissions, binary runtime status (running PIDs, last run time, success/error), monitor ring buffer header, engine state vs config comparison, auto-refreshes every 5 seconds
-- **`/audio-debug.html`** — Real-time audio monitor: connects via WebSocket to `ws-audio-server-node.js`, accumulates startup buffer (~300ms), plays through Web Audio API, waveform visualization, channel selection (pgm-l/pgm-r), auto-detects engine sample rate
+- **`/audio-debug.html`** — Real-time audio monitor: connects via WebSocket to `ws-audio-server-node.js`, 200ms ring buffer with 50ms warmup, plays through Web Audio API (ScriptProcessorNode bufSize=256), waveform visualization, per-channel selection, auto-detects engine sample rate, callback metrics (drop rate, events, available samples)
 
 ## Roadmap
 

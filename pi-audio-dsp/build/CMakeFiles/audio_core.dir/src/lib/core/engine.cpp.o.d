@@ -223,7 +223,12 @@ CMakeFiles/audio_core.dir/src/lib/core/engine.cpp.o: \
  /var/www/pi-audio/pi-audio-dsp/src/include/core/tcp_relay.h \
  /usr/include/c++/15/map /usr/include/c++/15/bits/stl_tree.h \
  /usr/include/c++/15/bits/stl_map.h \
- /usr/include/c++/15/bits/stl_multimap.h /usr/include/c++/15/cmath \
+ /usr/include/c++/15/bits/stl_multimap.h \
+ /usr/include/c++/15/condition_variable \
+ /usr/include/c++/15/bits/shared_ptr.h \
+ /usr/include/c++/15/bits/shared_ptr_base.h \
+ /usr/include/c++/15/bits/allocated_ptr.h \
+ /usr/include/c++/15/ext/concurrence.h /usr/include/c++/15/cmath \
  /usr/include/math.h /usr/include/x86_64-linux-gnu/bits/math-vector.h \
  /usr/include/x86_64-linux-gnu/bits/libm-simd-decl-stubs.h \
  /usr/include/x86_64-linux-gnu/bits/flt-eval-method.h \

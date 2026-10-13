@@ -21,6 +21,8 @@
     button:disabled { background: #555; color: #888; cursor: not-allowed; }
     button.stop { background: #c0392b; color: #fff; }
     button.stop:hover { background: #e74c3c; }
+    button.clear-log { background: #555; color: #ccc; }
+    button.clear-log:hover { background: #666; }
     .status { font-size: 0.8rem; color: #888; margin-top: 0.5rem; }
     .status.active { color: #8a9b4a; }
     .status.error { color: #e74c3c; }
@@ -31,8 +33,11 @@
     }
     .ch-select input[type="radio"] { accent-color: #8a9b4a; }
     .ch-select label.active-ch { background: #4a5a2a; color: #c0d080; }
-    .ch-select label.disabled-ch { opacity: 0.4; }
-    .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.5rem; }
+    .vol-row { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1rem; }
+    .vol-row label { font-size: 0.75rem; color: #888; white-space: nowrap; }
+    .vol-row input[type="range"] { flex: 1; max-width: 200px; accent-color: #8a9b4a; }
+    .vol-row .vol-val { font-size: 0.8rem; color: #c0d080; min-width: 3.5em; }
+    .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0.5rem; }
     .metric { background: #333; padding: 0.6rem; border-radius: 4px; }
     .metric-label { font-size: 0.7rem; color: #888; text-transform: uppercase; }
     .metric-value { font-size: 1.1rem; color: #e0e0e0; margin-top: 0.2rem; }
@@ -40,18 +45,23 @@
     .back { display: inline-block; margin-top: 1rem; color: #8a9b4a; text-decoration: none; font-size: 0.85rem; }
     .back:hover { text-decoration: underline; }
     .info { font-size: 0.75rem; color: #666; margin-top: 0.3rem; line-height: 1.4; }
+    .log-panel { background: #111; border-radius: 4px; padding: 0.75rem; margin-top: 0.5rem; max-height: 220px; overflow-y: auto; font-size: 0.7rem; line-height: 1.5; }
+    .log-panel .lg { color: #e74c3c; }
+    .log-panel .ls { color: #8a9b4a; }
+    .log-panel .lw { color: #3498db; }
+    .log-ctrl { display: flex; gap: 0.7rem; align-items: center; margin-top: 0.5rem; flex-wrap: wrap; }
+    .log-ctrl label { font-size: 0.7rem; color: #888; display: flex; align-items: center; gap: 0.3rem; cursor: pointer; }
+    .log-ctrl input[type="checkbox"] { accent-color: #8a9b4a; }
   </style>
 </head>
 <body>
   <h1>Debug Audio Monitor</h1>
-
   <div class="panel">
     <div class="controls">
       <button id="btn-start" onclick="startStream()">Start Monitor</button>
       <button id="btn-stop" class="stop" onclick="stopStream()" disabled>Stop</button>
-      <span id="status" class="status">Idle &mdash; click Start to begin monitoring</span>
+      <span id="status" class="status">Idle</span>
     </div>
-
     <div class="ch-select">
       <span style="font-size:0.75rem;color:#888;">MONITOR:</span>
       <label><input type="radio" name="monitor-ch" value="pgm-l"> PGM L</label>
@@ -60,353 +70,315 @@
       <label><input type="radio" name="monitor-ch" value="tweeter-l"> Tweeter L</label>
       <label><input type="radio" name="monitor-ch" value="woofer-r"> Woofer R</label>
       <label><input type="radio" name="monitor-ch" value="tweeter-r"> Tweeter R</label>
-      <label><input type="radio" name="monitor-ch" value="mic-1"> Mic Input 1</label>
-      <label><input type="radio" name="monitor-ch" value="mic-2"> Mic Input 2</label>
-      <label><input type="radio" name="monitor-ch" value="mic-3"> Mic Input 3</label>
-      <label><input type="radio" name="monitor-ch" value="mic-4"> Mic Input 4</label>
+      <label><input type="radio" name="monitor-ch" value="mic-1"> Mic 1</label>
+      <label><input type="radio" name="monitor-ch" value="mic-2"> Mic 2</label>
+      <label><input type="radio" name="monitor-ch" value="mic-3"> Mic 3</label>
+      <label><input type="radio" name="monitor-ch" value="mic-4"> Mic 4</label>
     </div>
-
+    <div class="vol-row">
+      <label for="vol-slider">MONITOR GAIN:</label>
+      <input type="range" id="vol-slider" min="0" max="200" value="50" step="1" oninput="setVolume(this.value)">
+      <span class="vol-val" id="vol-val">50%</span>
+    </div>
     <div class="metrics">
-      <div class="metric">
-        <div class="metric-label">Sample Rate</div>
-        <div class="metric-value" id="m-sr">&mdash;</div>
-      </div>
-      <div class="metric">
-        <div class="metric-label">Channels</div>
-        <div class="metric-value" id="m-ch">&mdash;</div>
-      </div>
-      <div class="metric">
-        <div class="metric-label">Queue Level</div>
-        <div class="metric-value" id="m-buf">&mdash;</div>
-      </div>
-      <div class="metric">
-        <div class="metric-label">RMS Level</div>
-        <div class="metric-value" id="m-rms">&mdash;</div>
-      </div>
-      <div class="metric">
-        <div class="metric-label">Buffers Queued</div>
-        <div class="metric-value" id="m-chunks">0</div>
-      </div>
-      <div class="metric">
-        <div class="metric-label">Drops</div>
-        <div class="metric-value" id="m-underruns">0</div>
-      </div>
+      <div class="metric"><div class="metric-label">Sample Rate</div><div class="metric-value" id="m-sr">&#8212;</div></div>
+      <div class="metric"><div class="metric-label">Queue Level</div><div class="metric-value" id="m-buf">&#8212;</div></div>
+      <div class="metric"><div class="metric-label">RMS Level</div><div class="metric-value" id="m-rms">&#8212;</div></div>
+      <div class="metric"><div class="metric-label">Chunks</div><div class="metric-value" id="m-chunks">0</div></div>
+      <div class="metric"><div class="metric-label">Underruns</div><div class="metric-value" id="m-underruns">0</div></div>
+      <div class="metric"><div class="metric-label">Ring Fill %</div><div class="metric-value" id="m-ringfill">0</div></div>
+      <div class="metric"><div class="metric-label">Drop Samples</div><div class="metric-value" id="m-drops">0</div></div>
+      <div class="metric"><div class="metric-label">WS Gap ms</div><div class="metric-value" id="m-wsgap">0</div></div>
     </div>
     <canvas id="waveform"></canvas>
-    <div class="info">
-      Streams per-channel monitor data (<code>/run/pi-audio/monitor-{channel}.raw</code>) and plays it through
-      the Web Audio API. Select a single channel above, then trigger a speaker test from the main UI to hear whitenoise.
-      Each channel has its own 4 MB mono ring buffer.
+    <div class="log-ctrl">
+      <button class="clear-log" onclick="clearLog()">Clear</button>
+      <button class="clear-log" onclick="copyLog()">Copy</button>
+      <label><input type="checkbox" id="lg-gaps" checked> Gaps</label>
+      <label><input type="checkbox" id="lg-sched" checked> Schedule</label>
+      <label><input type="checkbox" id="lg-ws"> WS msgs</label>
+      <label><input type="checkbox" id="lg-cb" checked> Callback</label>
+      <label><input type="checkbox" id="lg-info" checked> Info</label>
     </div>
+    <div class="log-panel" id="log-panel"></div>
+    <div class="info">ScriptProcessorNode ring buffer (3sec buffer). Audio thread reads at exact sample rate. Drops = samples output as silence when ring buffer empties.</div>
   </div>
-
   <a class="back" href="index.php">&larr; Back to main UI</a>
-
   <script>
-     let audioCtx = null;
-    let running = false;
-    let chunkCount = 0;
-    let dropCount = 0;
-    let sampleRate = 48000;
-    let streamChannels = 1;
-    let scheduledEnd = 0;
-    let queueTimeMs = 0;
-    let waveData = new Float32Array(2048);
-    let lastDataTime = 0;
-    let srRefreshTimer = null;
-    let ws = null;
-    let wsReconnectTimer = null;
-    let wsConnectTime = 0;
-    let wsBytesTotal = 0;
-    let accumData = null;
-    let accumLen = 0;
-    let scheduling = false;
-    const startupMs = 300;
+    var audioCtx = null, gainNode = null, running = false;
+    var chunkCount = 0, dropCount = 0, sampleRate = 48000;
+    var waveData = new Float32Array(2048);
+    var srRefreshTimer = null, ws = null, wsConnectTime = 0, wsBytesTotal = 0;
+    var queueTimeMs = 0, monitorGain = 0.5;
+    var ringBuf = null, ringWPos = 0, ringRPos = 0, ringSize = 0;
+    var scriptNode = null;
+    var lastDataTime = 0, lastMsgTime = 0;
+    var maxWsGap = 0, totalWsGap = 0, wsGapCount = 0;
+    var wsChunkCount = 0, wsLastRateLog = 0, wsTotalSamples = 0;
 
-    const WS_HOST = location.hostname || 'localhost';
-    const WS_PORT = 8765;
-    const WS_PROTO = location.protocol === 'https:' ? 'wss' : 'ws';
+    var WS_HOST = location.hostname || 'localhost';
+    var WS_PORT = 8765;
+    var WS_PROTO = location.protocol === 'https:' ? 'wss' : 'ws';
 
-    function getSelectedChannel() {
-      const sel = document.querySelector('input[name="monitor-ch"]:checked');
-      return sel ? sel.value : null;
+    function selCh() { var s = document.querySelector('input[name="monitor-ch"]:checked'); return s ? s.value : null; }
+    function setStatus(t, st) { var e = document.getElementById('status'); e.textContent = t; e.className = 'status' + (st ? ' ' + st : ''); }
+    function setVolume(v) { monitorGain = v / 100; document.getElementById('vol-val').textContent = v + '%'; if (gainNode) gainNode.gain.value = monitorGain; }
+
+    function ts() { return (performance.now() / 1000).toFixed(3); }
+    function addLog(text, cls) {
+      var p = document.getElementById('log-panel'), l = document.createElement('div');
+      l.className = ' ' + (cls || ''); l.textContent = '[' + ts() + '] ' + text;
+      p.appendChild(l); while (p.children.length > 500) p.removeChild(p.firstChild);
+      p.scrollTop = p.scrollHeight;
+    }
+    function logIf(text, cls, chkId) { if (document.getElementById(chkId).checked) addLog(text, cls); }
+    function clearLog() { document.getElementById('log-panel').innerHTML = ''; }
+    function copyLog() {
+      var p = document.getElementById('log-panel'), t = '';
+      for (var i = 0; i < p.children.length; i++) t += p.children[i].textContent + '\n';
+      navigator.clipboard.writeText(t.trim()).then(function() { addLog('Log copied', 'ls'); }).catch(function() {});
     }
 
-    function setStatus(text, state) {
-      const el = document.getElementById('status');
-      el.textContent = text;
-      el.className = 'status' + (state ? ' ' + state : '');
+    function updateRMS(f, n) {
+      var s = 0, sc = Math.min(n, 2048);
+      for (var i = 0; i < sc; i++) { s += f[i] * f[i]; if (i < waveData.length) waveData[i] = f[i]; }
+      var r = Math.sqrt(s / Math.max(1, sc));
+      document.getElementById('m-rms').textContent = (20 * Math.log10(Math.max(1e-10, r))).toFixed(1) + ' dB';
     }
 
-    function scheduleBuffer(buf) {
-      try {
-        const src = audioCtx.createBufferSource();
-        src.buffer = buf;
-        src.connect(audioCtx.destination);
-        const startAt = Math.max(audioCtx.currentTime, scheduledEnd);
-        src.start(startAt);
-        scheduledEnd = startAt + buf.duration;
-        queueTimeMs = Math.max(0, (scheduledEnd - audioCtx.currentTime) * 1000);
-        document.getElementById('m-buf').textContent = queueTimeMs.toFixed(0) + ' ms';
-      } catch(e) { console.error('[WS] scheduleBuffer error:', e); }
+    function ringWrite(data) {
+      if (!ringBuf) return;
+      var len = data.length;
+      var w = ringWPos;
+      var take = Math.min(len, ringBuf.length - 1 - ringSize);
+      if (take <= 0) return;
+      var end = w + take;
+      if (end <= ringBuf.length) {
+        ringBuf.set(data.subarray(0, take), w);
+      } else {
+        var first = ringBuf.length - w;
+        ringBuf.set(data.subarray(0, first), w);
+        ringBuf.set(data.subarray(first, take), 0);
+      }
+      ringWPos = (w + take) % ringBuf.length;
+      ringSize = Math.min(ringSize + take, ringBuf.length - 1);
     }
 
-    function buildAndSchedule(floats, frameCount) {
-      let rmsSum = 0;
-      const scanLen = Math.min(frameCount, 2048);
-      for (let i = 0; i < scanLen; i++) {
-        rmsSum += floats[i] * floats[i];
-        if (i < waveData.length) waveData[i] = floats[i];
-      }
-      const rms = Math.sqrt(rmsSum / Math.max(1, scanLen));
-      document.getElementById('m-rms').textContent =
-        (20 * Math.log10(Math.max(1e-10, rms))).toFixed(1) + ' dB';
+    function ringAvailable() { return ringSize; }
 
-      if (!scheduling) {
-        if (!accumData) accumData = new Float32Array(Math.ceil(startupMs / 1000 * sampleRate));
-        for (let i = 0; i < frameCount && accumLen + i < accumData.length; i++) {
-          accumData[accumLen + i] = floats[i];
-        }
-        accumLen = Math.min(accumLen + frameCount, accumData.length);
-        const pct = Math.min(100, (accumLen / accumData.length * 100)).toFixed(0);
-        setStatus('Buffering ' + pct + '%', 'active');
-        if (accumLen >= accumData.length) {
-          scheduling = true;
-          scheduledEnd = audioCtx.currentTime + 0.1;
-          const buf = audioCtx.createBuffer(1, accumLen, sampleRate);
-          buf.getChannelData(0).set(accumData);
-          scheduleBuffer(buf);
-          accumData = null;
-          accumLen = 0;
-        }
-        chunkCount++;
-        document.getElementById('m-chunks').textContent = chunkCount;
-        document.getElementById('m-ch').textContent = '1';
-        return;
-      }
+    function ringReadBlock(out, len) {
+      if (!ringBuf || ringSize === 0) { out.fill(0); dropCount += len; return; }
+      var r = ringRPos, avail = ringSize, take = Math.min(avail, len);
+      var end = r + take;
+      if (end <= ringBuf.length) { out.set(ringBuf.subarray(r, end), 0); }
+      else { var first = ringBuf.length - r; out.set(ringBuf.subarray(r), 0); out.set(ringBuf.subarray(0, take - first), first); }
+      ringRPos = (r + take) % ringBuf.length; ringSize -= take;
+      if (take < len) { out.fill(0, take); dropCount += (len - take); }
+    }
 
-      const buf = audioCtx.createBuffer(1, frameCount, sampleRate);
-      const chData = buf.getChannelData(0);
-      for (let i = 0; i < frameCount; i++) {
-        chData[i] = floats[i] || 0;
-      }
-      scheduleBuffer(buf);
-      chunkCount++;
-      document.getElementById('m-chunks').textContent = chunkCount;
-      document.getElementById('m-ch').textContent = '1';
+    function updateQueueLevel() {
+      var avail = ringAvailable();
+      queueTimeMs = (avail / sampleRate) * 1000;
+      document.getElementById('m-buf').textContent = queueTimeMs.toFixed(0) + ' ms';
+      document.getElementById('m-underruns').textContent = dropCount;
+      document.getElementById('m-ringfill').textContent = ringBuf ? Math.round((avail / ringBuf.length) * 100) + '%' : '0';
+      document.getElementById('m-drops').textContent = dropCount;
+    }
+
+    function resetDiagnostics() {
+      lastMsgTime = 0;
+      maxWsGap = 0; totalWsGap = 0; wsGapCount = 0;
+      dropCount = 0; ringSize = 0;
+      document.getElementById('m-wsgap').textContent = '0';
     }
 
     function startStream() {
       if (running) return;
-      running = true;
-      chunkCount = 0;
-      dropCount = 0;
-      lastDataTime = 0;
+       running = true; chunkCount = 0; dropCount = 0; queueTimeMs = 0; ringSize = 0;
+       wsChunkCount = 0; wsLastRateLog = 0; wsTotalSamples = 0;
       waveData.fill(0);
-      streamChannels = 1;
-      accumData = null;
-      accumLen = 0;
-      scheduling = false;
-
       document.getElementById('btn-start').disabled = true;
       document.getElementById('btn-stop').disabled = false;
       document.getElementById('m-chunks').textContent = '0';
       document.getElementById('m-underruns').textContent = '0';
       document.getElementById('m-buf').textContent = '\u2014';
       document.getElementById('m-rms').textContent = '\u2014';
+      resetDiagnostics(); clearLog();
       setStatus('Initializing...', 'active');
-
-      /* Fetch engine sample rate from status adapter before creating AudioContext */
       fetch('api.php?action=dsp-status')
-        .then(resp => resp.json())
-        .then(data => {
-          const sr = data.sampleRate || 48000;
-          sampleRate = sr;
-          document.getElementById('m-sr').textContent = (sr / 1000).toFixed(1) + ' kHz';
-          initAudio(sr);
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          sampleRate = d.sampleRate || 48000;
+          document.getElementById('m-sr').textContent = (sampleRate / 1000).toFixed(1) + ' kHz';
+          initAudio(sampleRate);
         })
-        .catch(() => initAudio(48000));
+        .catch(function() { initAudio(48000); });
     }
 
     function initAudio(sr) {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: sr });
       if (audioCtx.state === 'suspended') audioCtx.resume();
-      audioCtx.addEventListener('statechange', () => {
-        console.log('[WS] AudioContext state:', audioCtx.state);
-      });
-      scheduledEnd = audioCtx.currentTime;
+      gainNode = audioCtx.createGain(); gainNode.gain.value = monitorGain; gainNode.connect(audioCtx.destination);
+        ringBuf = new Float32Array(sr * 0.2);
+      ringWPos = 0; ringRPos = 0; ringSize = 0;
+      logIf('AudioCtx sr=' + sr + ' ringBuf=' + ringBuf.length + ' samples', 'li', 'lg-info');
 
-      const canvas = document.getElementById('waveform');
-      const ctx2d = canvas.getContext('2d');
-
-      function drawWave() {
-        if (!running) return;
-
-        const w = canvas.width = canvas.clientWidth * (window.devicePixelRatio || 1);
-        const h = canvas.height = 120 * (window.devicePixelRatio || 1);
-        ctx2d.fillStyle = '#1a1a1a';
-        ctx2d.fillRect(0, 0, w, h);
-
-        ctx2d.strokeStyle = '#333';
-        ctx2d.lineWidth = 1;
-        ctx2d.beginPath();
-        ctx2d.moveTo(0, h / 2);
-        ctx2d.lineTo(w, h / 2);
-        ctx2d.stroke();
-
-        const scroll = 3;
-        for (let i = 0; i < scroll; i++) {
-          waveData.set(waveData.slice(scroll));
-          for (let j = waveData.length - scroll; j < waveData.length; j++) {
-            waveData[j] = 0;
+      var bufSize = 256;
+      var cbCount = 0, cbDropTotal = 0, cbDropEvents = 0, cbLastLogTime = 0;
+        var warmupMin = Math.floor(sr * 0.05); // 50ms warmup, ~200ms latency
+      var warmupDone = false;
+      scriptNode = audioCtx.createScriptProcessor(bufSize, 1, 1);
+      scriptNode.onaudioprocess = function(e) {
+        var out = e.outputBuffer.getChannelData(0);
+        var len = out.length;
+        if (!warmupDone) {
+          if (ringSize >= warmupMin) {
+            warmupDone = true;
+            logIf('Warmup done, starting playback (buf=' + ringSize + ' samples, ~200ms latency)', 'ls', 'lg-cb');
+          } else {
+            out.fill(0);
+            if (cbCount % 120 === 0) logIf('Warmup... buf=' + ringSize + '/' + warmupMin, 'lw', 'lg-cb');
+            cbCount++;
+            return;
           }
         }
-        const fade = 0.985;
-        for (let i = 0; i < waveData.length; i++) {
-          waveData[i] *= fade;
-          if (Math.abs(waveData[i]) < 1e-6) waveData[i] = 0;
+        var availBefore = ringSize;
+        ringReadBlock(out, len);
+        var dropped = len - Math.min(availBefore, len);
+        if (dropped > 0) { cbDropTotal += dropped; cbDropEvents++; }
+        for (var i = 0; i < Math.min(len, waveData.length); i++) waveData[i] = out[i];
+        cbCount++;
+        if (cbCount % 60 === 0) {
+          var now = performance.now();
+          var elapsed = (now - cbLastLogTime) / 1000;
+          if (cbLastLogTime > 0 && elapsed > 0) {
+            var dr = (cbDropTotal / (elapsed * sampleRate)) * 100;
+            logIf('CB calls=' + cbCount + ' avail=' + ringSize + ' dropRate=' + dr.toFixed(1) + '% drops=' + cbDropTotal + ' events=' + cbDropEvents, 'lw', 'lg-cb');
+          }
+          cbLastLogTime = now;
+          cbDropTotal = 0; cbDropEvents = 0;
+          updateQueueLevel();
         }
+      };
+      scriptNode.connect(gainNode);
 
-        ctx2d.strokeStyle = '#8a9b4a';
-        ctx2d.lineWidth = 1.5;
-        ctx2d.beginPath();
-        for (let x = 0; x < w; x++) {
-          const idx = Math.floor((x / w) * waveData.length);
-          const v = waveData[idx] || 0;
-          const y = h / 2 - v * h / 2;
-          x === 0 ? ctx2d.moveTo(x, y) : ctx2d.lineTo(x, y);
+      var canvas = document.getElementById('waveform'), c = canvas.getContext('2d');
+      function draw() {
+        if (!running) return;
+        var w = canvas.width = canvas.clientWidth * (window.devicePixelRatio || 1);
+        var h = canvas.height = 120 * (window.devicePixelRatio || 1);
+        c.fillStyle = '#1a1a1a'; c.fillRect(0, 0, w, h);
+        c.strokeStyle = '#333'; c.lineWidth = 1; c.beginPath(); c.moveTo(0, h / 2); c.lineTo(w, h / 2); c.stroke();
+        waveData.copyWithin(0, 3);
+        waveData.fill(0, waveData.length - 3);
+        for (var i = 0; i < waveData.length; i++) { waveData[i] *= 0.985; if (Math.abs(waveData[i]) < 1e-6) waveData[i] = 0; }
+        c.strokeStyle = '#8a9b4a'; c.lineWidth = 1.5; c.beginPath();
+        for (var x = 0; x < w; x++) {
+          var v = waveData[Math.floor((x / w) * waveData.length)] || 0;
+          var y = h / 2 - v * h / 2; x === 0 ? c.moveTo(x, y) : c.lineTo(x, y);
         }
-        ctx2d.stroke();
-
-        const barColor = queueTimeMs > 400 ? 'rgba(138,155,74,0.6)' : 'rgba(200,80,60,0.5)';
-        ctx2d.fillStyle = barColor;
-        ctx2d.fillRect(0, h - 3, w * Math.min(1, queueTimeMs / 1000), 3);
-
-        requestAnimationFrame(drawWave);
+        c.stroke();
+        var col = queueTimeMs > 400 ? 'rgba(138,155,74,0.6)' : 'rgba(200,80,60,0.5)';
+        c.fillStyle = col; c.fillRect(0, h - 3, w * Math.min(1, queueTimeMs / 1000), 3);
+        requestAnimationFrame(draw);
       }
-      drawWave();
+      draw();
 
       setStatus('Connecting WebSocket...', 'active');
-
-      srRefreshTimer = setInterval(() => {
+      srRefreshTimer = setInterval(function() {
         if (!running) { clearInterval(srRefreshTimer); return; }
-        fetch('api.php?action=dsp-status')
-          .then(resp => resp.json())
-          .then(data => {
-            if (data.sampleRate && data.sampleRate !== sampleRate) {
-              sampleRate = data.sampleRate;
-              document.getElementById('m-sr').textContent = (sampleRate / 1000).toFixed(1) + ' kHz';
-            }
-          })
-          .catch(() => {});
+        fetch('api.php?action=dsp-status').then(function(r) { return r.json(); }).then(function(d) {
+          if (d.sampleRate && d.sampleRate !== sampleRate) {
+            sampleRate = d.sampleRate;
+            document.getElementById('m-sr').textContent = (sampleRate / 1000).toFixed(1) + ' kHz';
+          }
+        }).catch(function() {});
       }, 3000);
-
-      connectWebSocket();
+      connectWS();
     }
 
-    function connectWebSocket() {
-      if (ws) {
-        try { ws.close(); } catch(e) {}
-        ws = null;
-      }
-      if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
-
-      const ch = getSelectedChannel();
-      if (!ch) {
-        setStatus('No channel selected', 'error');
-        return;
-      }
-
-      wsBytesTotal = 0;
-      scheduledEnd = audioCtx ? audioCtx.currentTime + 0.2 : 0;
-      chunkCount = 0;
-      dropCount = 0;
-      waveData.fill(0);
-      accumData = null;
-      accumLen = 0;
-      scheduling = false;
-      const wsUrl = WS_PROTO + '://' + WS_HOST + ':' + WS_PORT + '/?ch=' + encodeURIComponent(ch);
-      console.log('[WS] Connecting to', wsUrl);
-      ws = new WebSocket(wsUrl);
-      ws.binaryType = 'arraybuffer';
-
-      ws.onopen = () => {
+    function connectWS() {
+      if (ws) { try { ws.close(); } catch(e) {} ws = null; }
+      var ch = selCh(); if (!ch) { setStatus('No channel', 'error'); return; }
+       wsBytesTotal = 0; chunkCount = 0; dropCount = 0; waveData.fill(0);
+       ringSize = 0; resetDiagnostics();
+       wsChunkCount = 0; wsLastRateLog = 0; wsTotalSamples = 0;
+      var url = WS_PROTO + '://' + WS_HOST + ':' + WS_PORT + '/?ch=' + encodeURIComponent(ch);
+      logIf('WS connect ' + url, 'li', 'lg-info');
+      ws = new WebSocket(url); ws.binaryType = 'arraybuffer';
+      ws.onopen = function() {
         wsConnectTime = performance.now();
-        console.log('[WS] Connected');
         setStatus('Streaming audio (WS)...', 'active');
+        logIf('WS connected', 'li', 'lg-info');
       };
-
-       ws.onmessage = (event) => {
+      ws.onmessage = function(ev) {
         try {
-          console.log('[WS] msg type=' + (event.data instanceof ArrayBuffer ? 'arraybuffer' : typeof event.data) + ' size=' + (event.data ? event.data.byteLength || event.data.length : 0));
+          var buf = ev.data; if (!buf || buf.byteLength < 4) return;
           lastDataTime = performance.now();
-          const buf = event.data;
-          if (!buf || buf.byteLength < 4) return;
-
-        wsBytesTotal += buf.byteLength;
-        const elapsed = ((performance.now() - wsConnectTime) / 1000).toFixed(1);
-        const kb = (wsBytesTotal / 1024).toFixed(1);
-        setStatus(`Streaming (${kb} kB / ${elapsed}s)`, 'active');
-
-        const frameCount = Math.floor(buf.byteLength / 4);
-        if (frameCount < 1) return;
-        const floats = new Float32Array(buf, 0, frameCount);
-        buildAndSchedule(floats, frameCount);
-        chunkCount++;
-        document.getElementById('m-chunks').textContent = chunkCount;
-        document.getElementById('m-ch').textContent = '1';
-        } catch(e) { console.error('[WS] onmessage error:', e); }
+          var gap = lastMsgTime > 0 ? lastDataTime - lastMsgTime : 0;
+          lastMsgTime = lastDataTime;
+          if (gap > 2) {
+            maxWsGap = Math.max(maxWsGap, gap);
+            totalWsGap += gap; wsGapCount++;
+            document.getElementById('m-wsgap').textContent = wsGapCount > 0 ? (totalWsGap / wsGapCount).toFixed(1) : '0';
+          }
+          wsBytesTotal += buf.byteLength;
+          var el = ((performance.now() - wsConnectTime) / 1000).toFixed(1);
+          var kb = (wsBytesTotal / 1024).toFixed(1);
+          setStatus('Streaming (' + kb + ' kB / ' + el + 's)', 'active');
+          var fc = Math.floor(buf.byteLength / 4); if (fc < 1) return;
+          var fl = new Float32Array(buf, 0, fc);
+          updateRMS(fl, fc); ringWrite(fl);
+           chunkCount++;
+           wsChunkCount++;
+           wsTotalSamples += fc;
+           document.getElementById('m-chunks').textContent = chunkCount;
+           var now = performance.now();
+           if (now - wsLastRateLog > 5000) {
+             var elapsed = (now - wsLastRateLog) / 1000;
+             var rate = wsTotalSamples / elapsed;
+             var pct = (rate / sampleRate * 100).toFixed(1);
+             logIf('WS rate=' + rate.toFixed(0) + ' samples/s (' + pct + '% of ' + sampleRate + ') chunks=' + wsChunkCount, 'lw', 'lg-cb');
+             wsLastRateLog = now;
+             wsTotalSamples = 0;
+             wsChunkCount = 0;
+           }
+           logIf('WS ' + fc + ' frames gap=' + gap.toFixed(0) + 'ms q=' + ringAvailable(), 'lw', 'lg-ws');
+        } catch(e) { console.error('[WS] error:', e); }
       };
-
-      ws.onerror = (err) => {
-        if (running) {
-          console.error('[WS] Error', err);
-          setStatus('WebSocket error, reconnecting...', 'error');
-        }
-      };
-
-      ws.onclose = (event) => {
-        console.log('[WS] Closed code=' + event.code + ' clean=' + event.wasClean + ' queue=' + queueTimeMs.toFixed(0) + 'ms chunks=' + chunkCount + ' audioCtx=' + (audioCtx ? audioCtx.state : 'null'));
+      ws.onerror = function() { if (running) setStatus('WS error', 'error'); };
+      ws.onclose = function(ev) {
+        logIf('WS closed code=' + ev.code + ' chunks=' + chunkCount + ' drops=' + dropCount, 'li', 'lg-info');
         if (!running) return;
-        setStatus('WebSocket disconnected (code ' + event.code + '), click Start to reconnect', 'error');
+        setStatus('Disconnected (code ' + ev.code + '), click Start', 'error');
       };
     }
 
     function stopStream() {
       running = false;
-      if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
       if (ws) { try { ws.close(); } catch(e) {} ws = null; }
       if (srRefreshTimer) clearInterval(srRefreshTimer);
-      if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+      if (scriptNode) { try { scriptNode.disconnect(); } catch(e) {} scriptNode = null; }
+      if (gainNode) { try { gainNode.disconnect(); } catch(e) {} gainNode = null; }
+      if (audioCtx) { audioCtx.close().catch(function() {}); audioCtx = null; }
+      ringBuf = null;
       document.getElementById('btn-start').disabled = false;
       document.getElementById('btn-stop').disabled = true;
       setStatus('Stopped', '');
     }
 
     window.addEventListener('unload', stopStream);
-
-    /* Restart stream when channel radio button changes */
-    document.querySelectorAll('input[name="monitor-ch"]').forEach(el => {
-      el.addEventListener('change', () => {
-        updateChannelHighlights();
+    document.querySelectorAll('input[name="monitor-ch"]').forEach(function(el) {
+      el.addEventListener('change', function() {
+        document.querySelectorAll('input[name="monitor-ch"]').forEach(function(e) { e.closest('label').classList.toggle('active-ch', e.checked); });
         if (!running) return;
         setStatus('Channel changed, reconnecting...', 'active');
-        if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
         if (ws) { try { ws.close(); } catch(e) {} ws = null; }
-        scheduledEnd = audioCtx.currentTime + 0.2;
-        chunkCount = 0;
-        dropCount = 0;
-        waveData.fill(0);
-        connectWebSocket();
+        chunkCount = 0; dropCount = 0; waveData.fill(0); ringSize = 0;
+        connectWS();
       });
     });
-
-    function updateChannelHighlights() {
-      document.querySelectorAll('input[name="monitor-ch"]').forEach(el => {
-        el.closest('label').classList.toggle('active-ch', el.checked);
-      });
-    }
-    updateChannelHighlights();
+    document.querySelectorAll('input[name="monitor-ch"]').forEach(function(el) { el.closest('label').classList.toggle('active-ch', el.checked); });
   </script>
 </body>
 </html>

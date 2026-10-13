@@ -145,7 +145,7 @@ When an ALSA capture device is configured, a dedicated capture thread reads ster
 
 The engine runs a playback thread that loops at real-time pace:
 
-1. **Sleep** for buffer duration (`bufferSize / sampleRate` seconds)
+1. **Sleep** using absolute timing (`clock_nanosleep` with `CLOCK_MONOTONIC` + `TIMER_ABSTIME`) to self-correct scheduler jitter
 2. **Read** stereo float32 from `pgm.raw` ring buffer (skip if PGM suspended)
 3. **Split** stereo into Mono_L and Mono_R
 4. **Read** mono float32 from `mic-1..4.raw` ring buffers
@@ -153,7 +153,7 @@ The engine runs a playback thread that loops at real-time pace:
 6. **Process** per-channel DSP pipeline (volume/mute + extensible stages)
 7. **Write** interleaved 4-channel float32 to ALSA PCM device
 8. **Write** per-channel monitor buffers (`monitor-{channel}.raw`)
-9. **Push** per-channel mono float32 to TcpRelay → TCP 127.0.0.1:8766
+9. **Push** per-channel mono float32 to TcpRelay → TCP 127.0.0.1:8766 (disabled channels skipped)
 
 ### Real-Time Pacing
 
@@ -178,8 +178,11 @@ The engine creates per-channel monitor buffers on startup. Each is a 4MB mono fl
 The engine pushes per-channel mono float32 data via TCP to `ws-audio-server-node.js` (port 8766). The TcpRelay module:
 
 - Buffers data from the playback thread (non-blocking push, never stalls audio processing)
-- Sends batches from a dedicated send thread (~25ms intervals)
+- Sends batches from a dedicated sendLoop thread using a condition variable (woken on new data)
+- Merged single-packet send replaces 3 separate `send()` calls per cycle
 - Protocol: `[1 byte channel ID][4 bytes BE sample count][sampleCount × 4 bytes mono float32]`
+- Channel enable/disable control: WS server sends `E <ch>\n` / `D <ch>\n` over TCP to enable/disable channels
+- Only enabled channels are swapped in sendLoop and pushed in pushChannel
 - Auto-reconnects if the TCP connection drops
 
 The Node.js relay server broadcasts to WebSocket clients per channel (port 8765).

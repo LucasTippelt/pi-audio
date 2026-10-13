@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <iostream>
 #include <chrono>
 #include <thread>
@@ -493,9 +494,24 @@ void AudioEngine::playbackThread() {
         chBuf[i].resize(bs);
     }
 
+    /* Initialize absolute timing: start one period from now */
+    struct timespec nextTs;
+    clock_gettime(CLOCK_MONOTONIC, &nextTs);
+    long periodNs = (long)(bs * 1000000000LL / m_config.sampleRate);
+    nextTs.tv_nsec += periodNs % 1000000000;
+    if (nextTs.tv_nsec >= 1000000000) { nextTs.tv_sec++; nextTs.tv_nsec -= 1000000000; }
+
     while (m_running.load()) {
-        std::this_thread::sleep_for(std::chrono::microseconds(
-            static_cast<int64_t>(bs * 1000000LL / m_config.sampleRate)));
+        /* Absolute timing: sleep until next period, so jitter doesn't compound */
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        if (now.tv_sec < nextTs.tv_sec || (now.tv_sec == nextTs.tv_sec && now.tv_nsec <= nextTs.tv_nsec)) {
+            struct timespec rem = {0, 0};
+            clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &nextTs, &rem);
+        }
+        /* Advance nextTs by one period */
+        nextTs.tv_nsec += periodNs % 1000000000;
+        if (nextTs.tv_nsec >= 1000000000) { nextTs.tv_sec++; nextTs.tv_nsec -= 1000000000; }
 
         std::fill(outputBuf.begin(), outputBuf.end(), 0.0f);
         std::fill(pgmLeft.begin(), pgmLeft.end(), 0.0f);
