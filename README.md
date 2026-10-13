@@ -2,14 +2,137 @@
 
 Single repository for the Pi Audio DSP engine and web interface.
 
-## Setup
+## Quick Install
 
-### Clone
+Full Raspberry Pi setup from a fresh OS image. Run steps in order.
+
+### 1. System update and dependencies
+
+```bash
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y apache2 cmake pkg-config libasound2-dev php libapache2-mod-php alsa-utils nodejs npm git
+```
+
+### 2. Clone the repository
 
 ```bash
 git clone https://github.com/LucasTippelt/pi-audio.git /var/www/pi-audio
 cd /var/www/pi-audio
 ```
+
+### 3. WebSocket server dependency
+
+```bash
+cd /var/www/pi-audio/pi-audio-web
+npm install ws
+```
+
+### 4. Create config directories
+
+```bash
+sudo mkdir -p /etc/pi-audio/config /etc/pi-audio/presets
+```
+
+### 5. Apache authentication and permissions
+
+Set up Basic Auth and grant `www-data` access to config and project directories:
+
+```bash
+sudo a2enmod auth_basic headers
+sudo install -d -o root -g www-data -m 0750 /etc/pi-audio
+sudo htpasswd -c /etc/pi-audio/htpasswd pi-audio
+sudo chown root:www-data /etc/pi-audio/htpasswd
+sudo chmod 0640 /etc/pi-audio/htpasswd
+sudo install -d -o www-data -g www-data -m 0770 /etc/pi-audio/config /etc/pi-audio/presets
+sudo chown -R www-data:www-data /var/www/pi-audio
+```
+
+Username for web login is `pi-audio`.
+
+### 6. Apache virtual host
+
+Create `/etc/apache2/sites-available/pi-audio.conf`:
+
+```apache
+<VirtualHost *:80>
+    DocumentRoot /var/www/pi-audio/pi-audio-web
+    <Directory /var/www/pi-audio/pi-audio-web>
+        AllowOverride All
+        Require all granted
+    </Directory>
+    SetEnv PI_AUDIO_STATUS_BIN /usr/local/bin/pi-audio-status
+    SetEnv PI_AUDIO_APPLY_BIN /usr/local/bin/pi-audio-apply
+    SetEnv PI_AUDIO_MEASURE_BIN /usr/local/bin/pi-audio-measure
+    SetEnv PI_AUDIO_TEST_BIN_WOOFER_L /usr/local/bin/pi-audio-test
+    SetEnv PI_AUDIO_TEST_BIN_WOOFER_R /usr/local/bin/pi-audio-test
+    SetEnv PI_AUDIO_TEST_BIN_TWEETER_L /usr/local/bin/pi-audio-test
+    SetEnv PI_AUDIO_TEST_BIN_TWEETER_R /usr/local/bin/pi-audio-test
+    SetEnv PI_AUDIO_CONFIG_DIR /etc/pi-audio/config
+    SetEnv PI_AUDIO_PRESETS_DIR /etc/pi-audio/presets
+    SetEnv PI_AUDIO_CARD 0
+    SetEnv PI_AUDIO_CONTROL PCM
+    SetEnv PI_AUDIO_XRUN_FILE /run/pi-audio/xrun
+</VirtualHost>
+```
+
+Adjust `PI_AUDIO_CARD` to match your ALSA hardware.
+
+### 7. Apache systemd sandbox override
+
+Apache's sandbox blocks device access by default. Create an override so PHP can reach the ALSA mixer:
+
+```bash
+sudo systemctl edit apache2
+```
+
+Paste:
+```ini
+[Service]
+ReadWritePaths=/etc/pi-audio/config /etc/pi-audio/presets
+PrivateDevices=no
+ProcSubset=all
+DeviceAllow=/dev/snd/controlC0 rw
+```
+
+### 8. Audio group and site activation
+
+Add `www-data` to the `audio` group so Apache can access sound devices, then enable the site:
+
+```bash
+sudo usermod -aG audio www-data
+sudo a2ensite pi-audio.conf
+sudo a2dissite 000-default.conf
+sudo systemctl daemon-reload
+sudo systemctl restart apache2
+```
+
+Verify sandbox settings:
+```bash
+sudo systemctl show apache2 -p PrivateDevices -p DevicePolicy -p DeviceAllow -p ProcSubset
+```
+
+### 9. Install systemd services and deploy
+
+Copy the service files, then run the deploy script (builds the DSP engine, installs binaries, and enables services):
+
+```bash
+sudo cp /var/www/pi-audio/pi-audio-ws-server.service /etc/systemd/system/
+sudo cp /var/www/pi-audio/pi-audio-dsp/pi-audio-engine.service /etc/systemd/system/
+cd /var/www/pi-audio/pi-audio-dsp
+sudo ./deploy.sh
+```
+
+### 10. Start the WebSocket server
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable pi-audio-ws-server
+sudo systemctl start pi-audio-ws-server
+```
+
+The web interface is now available at `http://<pi-ip>/`.
+
+## Setup
 
 ### VS Code SSH
 
@@ -156,40 +279,6 @@ sudo bash pi-audio-dsp/redeploy.sh
 
 The redeploy script stops the engine, copies binaries from `pi-audio-dsp/build/`, reinstalls the service, fixes permissions, and restarts all services (engine, Apache, WebSocket server).
 
-## Services
-
-- **pi-audio-engine** — Main audio engine (systemd service)
-- **pi-audio-ws-server** — WebSocket relay server for real-time audio monitoring (systemd service)
-- **Apache** — Web interface on port 80
-
-### Apache Config
-
-`/etc/apache2/sites-available/pi-audio.conf`:
-
-```apache
-<VirtualHost *:80>
-    DocumentRoot /var/www/pi-audio/pi-audio-web
-    <Directory /var/www/pi-audio/pi-audio-web>
-        AllowOverride All
-        Require all granted
-    </Directory>
-    SetEnv PI_AUDIO_STATUS_BIN /usr/local/bin/pi-audio-status
-    SetEnv PI_AUDIO_APPLY_BIN /usr/local/bin/pi-audio-apply
-    SetEnv PI_AUDIO_MEASURE_BIN /usr/local/bin/pi-audio-measure
-    SetEnv PI_AUDIO_TEST_BIN_WOOFER_L /usr/local/bin/pi-audio-test
-    SetEnv PI_AUDIO_TEST_BIN_WOOFER_R /usr/local/bin/pi-audio-test
-    SetEnv PI_AUDIO_TEST_BIN_TWEETER_L /usr/local/bin/pi-audio-test
-    SetEnv PI_AUDIO_TEST_BIN_TWEETER_R /usr/local/bin/pi-audio-test
-    SetEnv PI_AUDIO_CONFIG_DIR /etc/pi-audio/config
-    SetEnv PI_AUDIO_PRESETS_DIR /etc/pi-audio/presets
-    SetEnv PI_AUDIO_CARD 0
-    SetEnv PI_AUDIO_CONTROL PCM
-    SetEnv PI_AUDIO_XRUN_FILE /run/pi-audio/xrun
-</VirtualHost>
-```
-
-Adjust `PI_AUDIO_CARD` and `PI_AUDIO_CONTROL` to match your `.asoundrc` / ALSA hardware.
-
 ## Architecture
 
 ### Audio Data Flow
@@ -295,14 +384,6 @@ Logs written to `/var/log/pi-audio/engine.log` with automatic rotation:
 - **Max size:** 1 MB per file
 - **Backups:** 3 rotated files (`engine.log.1`, `.2`, `.3`)
 - Older backups are overwritten on rotation
-
-## Dependencies
-
-### DSP Engine
-
-```bash
-sudo apt install cmake pkg-config libasound2-dev
-```
 
 ### WebSocket Monitoring Server
 
