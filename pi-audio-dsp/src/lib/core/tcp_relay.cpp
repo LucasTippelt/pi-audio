@@ -111,7 +111,8 @@ void TcpRelay::sendLoop() {
             std::unique_lock<std::mutex> lock(m_mutex);
             if (!m_connected || m_sock < 0) {
                 lock.unlock();
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                reconnect();
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
                 continue;
             }
             m_dataCV.wait_for(lock, std::chrono::milliseconds(1), [this] {
@@ -302,8 +303,7 @@ void TcpRelay::ctrlLoop() {
 
 void TcpRelay::reconnect() {
     if (m_host.empty() || m_port == 0) return;
-    Logger::getInstance().info("TcpRelay: reconnecting...");
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
     m_ctrlBufLen = 0;
     for (int i = 0; i < MAX_CHANNELS; i++) m_channelEnabled[i] = false;
 
@@ -327,4 +327,5 @@ void TcpRelay::reconnect() {
         return;
     }
     m_connected = true;
+    Logger::getInstance().info("TcpRelay: connected to " + m_host + ":" + std::to_string(m_port));
 }
