@@ -20,6 +20,7 @@ make -j$(nproc)
 cd "$REPO_DIR"
 
 # Create directories
+#
 sudo mkdir -p /etc/pi-audio/config
 sudo mkdir -p /etc/pi-audio/presets
 sudo mkdir -p /var/log/pi-audio
