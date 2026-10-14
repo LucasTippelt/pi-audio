@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/var/www/pi-audio/pi-audio-dsp/build/cmake_install.cmake"
-	],
-	"Parallel" : false
-}
