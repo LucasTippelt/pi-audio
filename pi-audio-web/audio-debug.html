@@ -101,7 +101,7 @@
       <label><input type="checkbox" id="lg-info" checked> Info</label>
     </div>
     <div class="log-panel" id="log-panel"></div>
-    <div class="info">ScriptProcessorNode ring buffer (3sec buffer). Audio thread reads at exact sample rate. Drops = samples output as silence when ring buffer empties.</div>
+    <div class="info">AudioWorklet ring buffer (500ms buffer). Dedicated audio thread reads at exact sample rate. Drops = samples output as silence when ring buffer empties.</div>
   </div>
   <a class="back" href="index.php">&larr; Back to main UI</a>
   <script>
@@ -110,11 +110,12 @@
     var waveData = new Float32Array(2048);
     var srRefreshTimer = null, ws = null, wsConnectTime = 0, wsBytesTotal = 0;
     var queueTimeMs = 0, monitorGain = 0.5;
-    var ringBuf = null, ringWPos = 0, ringRPos = 0, ringSize = 0;
+    var ringBuf = null, ringWPos = 0, ringRPos = 0, ringSize = 0, ringBufCapacity = 0;
     var scriptNode = null;
     var lastDataTime = 0, lastMsgTime = 0;
     var maxWsGap = 0, totalWsGap = 0, wsGapCount = 0;
     var wsChunkCount = 0, wsLastRateLog = 0, wsTotalSamples = 0;
+    var cbLastLogTime = 0, cbDropTotal = 0;
 
     var WS_HOST = location.hostname || 'localhost';
     var WS_PORT = 8765;
@@ -181,7 +182,7 @@
       queueTimeMs = (avail / sampleRate) * 1000;
       document.getElementById('m-buf').textContent = queueTimeMs.toFixed(0) + ' ms';
       document.getElementById('m-underruns').textContent = dropCount;
-      document.getElementById('m-ringfill').textContent = ringBuf ? Math.round((avail / ringBuf.length) * 100) + '%' : '0';
+      document.getElementById('m-ringfill').textContent = ringBufCapacity ? Math.round((avail / ringBufCapacity) * 100) + '%' : '0';
       document.getElementById('m-drops').textContent = dropCount;
     }
 
@@ -219,82 +220,73 @@
       audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: sr });
       if (audioCtx.state === 'suspended') audioCtx.resume();
       gainNode = audioCtx.createGain(); gainNode.gain.value = monitorGain; gainNode.connect(audioCtx.destination);
-        ringBuf = new Float32Array(sr * 0.2);
-      ringWPos = 0; ringRPos = 0; ringSize = 0;
-      logIf('AudioCtx sr=' + sr + ' ringBuf=' + ringBuf.length + ' samples', 'li', 'lg-info');
 
-      var bufSize = 256;
-      var cbCount = 0, cbDropTotal = 0, cbDropEvents = 0, cbLastLogTime = 0;
-        var warmupMin = Math.floor(sr * 0.05); // 50ms warmup, ~200ms latency
-      var warmupDone = false;
-      scriptNode = audioCtx.createScriptProcessor(bufSize, 1, 1);
-      scriptNode.onaudioprocess = function(e) {
-        var out = e.outputBuffer.getChannelData(0);
-        var len = out.length;
-        if (!warmupDone) {
-          if (ringSize >= warmupMin) {
-            warmupDone = true;
-            logIf('Warmup done, starting playback (buf=' + ringSize + ' samples, ~200ms latency)', 'ls', 'lg-cb');
-          } else {
-            out.fill(0);
-            if (cbCount % 120 === 0) logIf('Warmup... buf=' + ringSize + '/' + warmupMin, 'lw', 'lg-cb');
-            cbCount++;
-            return;
-          }
-        }
-        var availBefore = ringSize;
-        ringReadBlock(out, len);
-        var dropped = len - Math.min(availBefore, len);
-        if (dropped > 0) { cbDropTotal += dropped; cbDropEvents++; }
-        for (var i = 0; i < Math.min(len, waveData.length); i++) waveData[i] = out[i];
-        cbCount++;
-        if (cbCount % 60 === 0) {
-          var now = performance.now();
-          var elapsed = (now - cbLastLogTime) / 1000;
-          if (cbLastLogTime > 0 && elapsed > 0) {
-            var dr = (cbDropTotal / (elapsed * sampleRate)) * 100;
-            logIf('CB calls=' + cbCount + ' avail=' + ringSize + ' dropRate=' + dr.toFixed(1) + '% drops=' + cbDropTotal + ' events=' + cbDropEvents, 'lw', 'lg-cb');
-          }
-          cbLastLogTime = now;
-          cbDropTotal = 0; cbDropEvents = 0;
-          updateQueueLevel();
-        }
-      };
-      scriptNode.connect(gainNode);
+      var ringBufSamples = Math.floor(sr * 0.5);
+      var warmupMin = Math.floor(sr * 0.05);
+      ringBufCapacity = ringBufSamples;
+      var ringBufArray = new ArrayBuffer(ringBufSamples * 4);
+      logIf('AudioCtx sr=' + sr + ' ringBuf=' + ringBufSamples + ' samples (' + (ringBufSamples / sr * 1000).toFixed(0) + 'ms)', 'li', 'lg-info');
 
-      var canvas = document.getElementById('waveform'), c = canvas.getContext('2d');
-      function draw() {
-        if (!running) return;
-        var w = canvas.width = canvas.clientWidth * (window.devicePixelRatio || 1);
-        var h = canvas.height = 120 * (window.devicePixelRatio || 1);
-        c.fillStyle = '#1a1a1a'; c.fillRect(0, 0, w, h);
-        c.strokeStyle = '#333'; c.lineWidth = 1; c.beginPath(); c.moveTo(0, h / 2); c.lineTo(w, h / 2); c.stroke();
-        waveData.copyWithin(0, 3);
-        waveData.fill(0, waveData.length - 3);
-        for (var i = 0; i < waveData.length; i++) { waveData[i] *= 0.985; if (Math.abs(waveData[i]) < 1e-6) waveData[i] = 0; }
-        c.strokeStyle = '#8a9b4a'; c.lineWidth = 1.5; c.beginPath();
-        for (var x = 0; x < w; x++) {
-          var v = waveData[Math.floor((x / w) * waveData.length)] || 0;
-          var y = h / 2 - v * h / 2; x === 0 ? c.moveTo(x, y) : c.lineTo(x, y);
-        }
-        c.stroke();
-        var col = queueTimeMs > 400 ? 'rgba(138,155,74,0.6)' : 'rgba(200,80,60,0.5)';
-        c.fillStyle = col; c.fillRect(0, h - 3, w * Math.min(1, queueTimeMs / 1000), 3);
-        requestAnimationFrame(draw);
-      }
-      draw();
-
-      setStatus('Connecting WebSocket...', 'active');
-      srRefreshTimer = setInterval(function() {
-        if (!running) { clearInterval(srRefreshTimer); return; }
-        fetch('api.php?action=dsp-status').then(function(r) { return r.json(); }).then(function(d) {
-          if (d.sampleRate && d.sampleRate !== sampleRate) {
-            sampleRate = d.sampleRate;
-            document.getElementById('m-sr').textContent = (sampleRate / 1000).toFixed(1) + ' kHz';
+      audioCtx.audioWorklet.addModule('audio-playback-processor.js').then(function() {
+        scriptNode = new AudioWorkletNode(audioCtx, 'audio-playback-processor', { outputChannelCount: [1] });
+        scriptNode.port.postMessage({ type: 'init', buffer: ringBufArray, warmupMin: warmupMin });
+        scriptNode.port.onmessage = function(e) {
+          var d = e.data;
+          if (d.type === 'ready') {
+            logIf('AudioWorklet ready, ringBuf=' + ringBufSamples + ' warmup=' + warmupMin, 'ls', 'lg-cb');
+          } else if (d.type === 'status') {
+            ringSize = d.size;
+            if (d.drops > 0) { dropCount += d.drops; cbDropTotal += d.drops; }
+            updateQueueLevel();
+            var cbNow = performance.now();
+            if (cbNow - cbLastLogTime > 2000) {
+              var cbElapsed = (cbNow - cbLastLogTime) / 1000;
+              var cbDr = (cbDropTotal / (cbElapsed * sampleRate)) * 100;
+              logIf('WV avail=' + ringSize + ' dropRate=' + cbDr.toFixed(1) + '% drops=' + cbDropTotal, 'lw', 'lg-cb');
+              cbLastLogTime = cbNow;
+              cbDropTotal = 0;
+            }
           }
-        }).catch(function() {});
-      }, 3000);
-      connectWS();
+        };
+        scriptNode.connect(gainNode);
+
+        var canvas = document.getElementById('waveform'), c = canvas.getContext('2d');
+        function draw() {
+          if (!running) return;
+          var w = canvas.width = canvas.clientWidth * (window.devicePixelRatio || 1);
+          var h = canvas.height = 120 * (window.devicePixelRatio || 1);
+          c.fillStyle = '#1a1a1a'; c.fillRect(0, 0, w, h);
+          c.strokeStyle = '#333'; c.lineWidth = 1; c.beginPath(); c.moveTo(0, h / 2); c.lineTo(w, h / 2); c.stroke();
+          waveData.copyWithin(0, 3);
+          waveData.fill(0, waveData.length - 3);
+          for (var i = 0; i < waveData.length; i++) { waveData[i] *= 0.985; if (Math.abs(waveData[i]) < 1e-6) waveData[i] = 0; }
+          c.strokeStyle = '#8a9b4a'; c.lineWidth = 1.5; c.beginPath();
+          for (var x = 0; x < w; x++) {
+            var v = waveData[Math.floor((x / w) * waveData.length)] || 0;
+            var y = h / 2 - v * h / 2; x === 0 ? c.moveTo(x, y) : c.lineTo(x, y);
+          }
+          c.stroke();
+          var col = queueTimeMs > 400 ? 'rgba(138,155,74,0.6)' : 'rgba(200,80,60,0.5)';
+          c.fillStyle = col; c.fillRect(0, h - 3, w * Math.min(1, queueTimeMs / 1000), 3);
+          requestAnimationFrame(draw);
+        }
+        draw();
+
+        setStatus('Connecting WebSocket...', 'active');
+        srRefreshTimer = setInterval(function() {
+          if (!running) { clearInterval(srRefreshTimer); return; }
+          fetch('api.php?action=dsp-status').then(function(r) { return r.json(); }).then(function(d) {
+            if (d.sampleRate && d.sampleRate !== sampleRate) {
+              sampleRate = d.sampleRate;
+              document.getElementById('m-sr').textContent = (sampleRate / 1000).toFixed(1) + ' kHz';
+            }
+          }).catch(function() {});
+        }, 3000);
+        connectWS();
+      }).catch(function(err) {
+        logIf('AudioWorklet failed: ' + err.message, 'lg', 'lg-info');
+        setStatus('AudioWorklet not supported', 'error');
+      });
     }
 
     function connectWS() {
@@ -328,22 +320,25 @@
           setStatus('Streaming (' + kb + ' kB / ' + el + 's)', 'active');
           var fc = Math.floor(buf.byteLength / 4); if (fc < 1) return;
           var fl = new Float32Array(buf, 0, fc);
-          updateRMS(fl, fc); ringWrite(fl);
-           chunkCount++;
-           wsChunkCount++;
-           wsTotalSamples += fc;
-           document.getElementById('m-chunks').textContent = chunkCount;
-           var now = performance.now();
-           if (now - wsLastRateLog > 5000) {
-             var elapsed = (now - wsLastRateLog) / 1000;
-             var rate = wsTotalSamples / elapsed;
-             var pct = (rate / sampleRate * 100).toFixed(1);
-             logIf('WS rate=' + rate.toFixed(0) + ' samples/s (' + pct + '% of ' + sampleRate + ') chunks=' + wsChunkCount, 'lw', 'lg-cb');
-             wsLastRateLog = now;
-             wsTotalSamples = 0;
-             wsChunkCount = 0;
-           }
-           logIf('WS ' + fc + ' frames gap=' + gap.toFixed(0) + 'ms q=' + ringAvailable(), 'lw', 'lg-ws');
+          updateRMS(fl, fc);
+          if (scriptNode && scriptNode.port) {
+            scriptNode.port.postMessage({ type: 'write', buffer: fl.buffer }, [fl.buffer]);
+          }
+          chunkCount++;
+          wsChunkCount++;
+          wsTotalSamples += fc;
+          document.getElementById('m-chunks').textContent = chunkCount;
+          var now = performance.now();
+          if (now - wsLastRateLog > 5000) {
+            var elapsed = (now - wsLastRateLog) / 1000;
+            var rate = wsTotalSamples / elapsed;
+            var pct = (rate / sampleRate * 100).toFixed(1);
+            logIf('WS rate=' + rate.toFixed(0) + ' samples/s (' + pct + '% of ' + sampleRate + ') chunks=' + wsChunkCount, 'lw', 'lg-cb');
+            wsLastRateLog = now;
+            wsTotalSamples = 0;
+            wsChunkCount = 0;
+          }
+          logIf('WS ' + fc + ' frames gap=' + gap.toFixed(0) + 'ms q=' + ringSize, 'lw', 'lg-ws');
         } catch(e) { console.error('[WS] error:', e); }
       };
       ws.onerror = function() { if (running) setStatus('WS error', 'error'); };
