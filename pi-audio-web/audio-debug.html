@@ -260,7 +260,7 @@
         } else {
           ringBuf = new Float32Array(ringBufSamples);
           ringWPos = 0; ringRPos = 0; ringSize = 0;
-          var bufSize = 1024;
+          var bufSize = 4096;
           var cbCount = 0, cbDropTotalLocal = 0, cbDropEvents = 0, cbLastLogTimeLocal = 0;
           var warmupDone = false;
           scriptNode = audioCtx.createScriptProcessor(bufSize, 1, 1);
