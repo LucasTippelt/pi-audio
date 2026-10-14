@@ -251,6 +251,7 @@ function renderCrossovers() {
       <div class="crossover-card-head"><span>${filterType}</span><strong>${name}</strong></div>
       <div class="crossover-card-fields">
         <label class="field-label">FREQUENCY <input class="crossover-number" data-crossover-frequency="${name}" type="number" min="30" max="500" step="1" value="${crossover.frequency}" aria-label="${name} crossover frequency"> Hz</label>
+        <label class="field-label">TOPOLOGY <select class="select-control" data-crossover-topology="${name}">${['Linkwitz-Riley', 'Butterworth', 'Bessel'].map((t) => `<option value="${t}" ${crossover.topology === t ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
         <label class="field-label">SLOPE <select class="select-control" data-crossover-slope="${name}">${[12, 18, 24, 36, 48].map((slope) => `<option value="${slope}" ${crossover.slope === slope ? 'selected' : ''}>${slope} dB/oct</option>`).join('')}</select></label>
       </div>
     </article>`;
@@ -942,10 +943,11 @@ function bindEvents() {
   $('#audio-output').addEventListener('change', (event) => { ui.state.output = event.target.value; queueSave(); });
   $('#crossover-list').addEventListener('change', (event) => {
     const field = event.target;
-    const name = field.dataset.crossoverFrequency || field.dataset.crossoverSlope;
+    const name = field.dataset.crossoverFrequency || field.dataset.crossoverSlope || field.dataset.crossoverTopology;
     if (!name || !ui.state.crossovers[name]) return;
     if (field.dataset.crossoverFrequency) ui.state.crossovers[name].frequency = Number(field.value);
     if (field.dataset.crossoverSlope) ui.state.crossovers[name].slope = Number(field.value);
+    if (field.dataset.crossoverTopology) ui.state.crossovers[name].topology = field.value;
     queueSave();
   });
   document.querySelectorAll('[data-crossover-side]').forEach((button) => button.addEventListener('click', () => {
