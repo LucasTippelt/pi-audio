@@ -64,10 +64,9 @@ void AudioEngine::relayThread() {
     while (m_relayRunning.load()) {
         bool gotData = false;
         for (int ch = 0; ch < 10; ++ch) {
-            while (true) {
-                size_t frames = 0;
-                const float* data = m_relayCh[ch].tryRead(frames);
-                if (!data) break;
+            size_t frames = 0;
+            const float* data = m_relayCh[ch].tryRead(frames);
+            if (data) {
                 tcpRelay().pushChannel((uint8_t)ch, data, frames);
                 gotData = true;
             }
@@ -147,7 +146,16 @@ void AudioEngine::playbackThread() {
         std::fill(pgmLeft.begin(), pgmLeft.end(), 0.0f);
         std::fill(pgmRight.begin(), pgmRight.end(), 0.0f);
 
-        if (!m_pgmSuspended.load()) {
+        /* Routing: check test mode FIRST */
+        static std::string lastMode;
+        std::string curMode = getTestMode();
+        if (curMode != lastMode) {
+            lastMode = curMode;
+            Logger::getInstance().info("[TEST-MODE] switched to: " + (curMode.empty() ? "none" : curMode));
+        }
+        bool testActive = !curMode.empty();
+
+        if (!m_pgmSuspended.load() && !(testActive && curMode == "tweeter") && !(testActive && curMode == "woofer")) {
             size_t l = m_pgmLeftRing.pop(pgmLeft.data(), bs);
             size_t r = m_pgmRightRing.pop(pgmRight.data(), bs);
             size_t minF = (l < r) ? l : r;
@@ -162,39 +170,52 @@ void AudioEngine::playbackThread() {
             m_micRing[i].pop(m_micBuf[i].data(), bs);
         }
 
-        /* Route: PGM L -> DSP chain -> tweeter + woofer outputs */
-        for (size_t i = 0; i < bs; ++i) {
-            tweeterBuf[i] = pgmLeft[i];
-            wooferBuf[i] = pgmLeft[i];
-        }
-
-        /* Test injection: per-channel, mixed into output before DSP */
+        /* Test injection: per-channel, read before mixing */
         static std::vector<float> testBufTweeter(bs), testBufWoofer(bs);
         static int testLogCounter = 0;
         size_t tFrames = 0, wFrames = 0;
         {
             std::fill(testBufTweeter.begin(), testBufTweeter.end(), 0.0f);
             tFrames = readTestInject("pi-audio-test-tweeter", testBufTweeter.data(), bs);
-            for (size_t i = 0; i < bs; ++i) tweeterBuf[i] += testBufTweeter[i];
         }
         {
             std::fill(testBufWoofer.begin(), testBufWoofer.end(), 0.0f);
             wFrames = readTestInject("pi-audio-test-woofer", testBufWoofer.data(), bs);
-            for (size_t i = 0; i < bs; ++i) wooferBuf[i] += testBufWoofer[i];
         }
         testLogCounter++;
         if (testLogCounter % 50 == 0) {
-            std::cerr << "[TEST-INJECT] tweeter=" << tFrames << "f woofer=" << wFrames << "f" << std::endl;
+            Logger::getInstance().info("[TEST-INJECT] tweeter=" + std::to_string(tFrames) + "f woofer=" + std::to_string(wFrames) + "f");
+        }
+
+        if (testActive && curMode == "tweeter") {
+            /* Tweeter test: only tweeter gets signal, woofer silent, PGM suspended */
+            for (size_t i = 0; i < bs; ++i) {
+                tweeterBuf[i] = testBufTweeter[i];
+                wooferBuf[i] = 0.0f;
+            }
+        } else if (testActive && curMode == "woofer") {
+            /* Woofer test: only woofer gets signal, tweeter silent, PGM suspended */
+            for (size_t i = 0; i < bs; ++i) {
+                tweeterBuf[i] = 0.0f;
+                wooferBuf[i] = testBufWoofer[i];
+            }
+        } else if (testActive && curMode == "pgm-l") {
+            /* PGM_L test: no physical speakers, PGM monitoring shows raw input */
+            for (size_t i = 0; i < bs; ++i) {
+                tweeterBuf[i] = 0.0f;
+                wooferBuf[i] = 0.0f;
+            }
+        } else {
+            /* Normal: PGM L -> tweeter + woofer */
+            for (size_t i = 0; i < bs; ++i) {
+                tweeterBuf[i] = pgmLeft[i];
+                wooferBuf[i] = pgmLeft[i];
+            }
         }
 
         /* Per-output DSP: NO locks (double-buffered stages) */
         processDspTweeter(tweeterBuf.data(), bs);
         processDspWoofer(wooferBuf.data(), bs);
-
-        /* PGM R passthrough: dry signal to woofer output (linked speaker placeholder) */
-        for (size_t i = 0; i < bs; ++i) {
-            wooferBuf[i] += pgmRight[i];
-        }
 
         /* Interleave for ALSA: tweeter on ch0, woofer on ch1 */
         if (channels >= 2) {
@@ -213,7 +234,7 @@ void AudioEngine::playbackThread() {
             }
         }
 
-        /* Push to relay: ch0=pgm-l, ch1=pgm-r, ch2=tweeter, ch3=woofer, ch4..=mics */
+        /* Push to relay: ch0=pgm-l, ch1=pgm-r, ch2=tweeter-output, ch3=woofer-output, ch4..=mics */
         m_relayCh[CH_PGM_L].push(pgmLeft.data(), bs);
         m_relayCh[CH_PGM_R].push(pgmRight.data(), bs);
         m_relayCh[CH_TWEETER].push(tweeterBuf.data(), bs);

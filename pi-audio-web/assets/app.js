@@ -27,6 +27,7 @@ const ui = {
   pendingAction: null,
   confirmReturnFocus: null,
   destructiveBusy: false,
+  testBusy: false,
 };
 
 const defaults = {
@@ -150,7 +151,7 @@ function queueSave() {
   setSaveStatus('Unsaved changes', true);
   if (ui.currentSource) ui.currentSource.saved = false;
   updateApplyButton();
-  drawCurve();
+  drawCurves();
   ui.saveTimer = setTimeout(() => {
     ui.saveTimer = null;
     saveState();
@@ -368,7 +369,7 @@ function renderState(includePresets = true) {
   $('#curve-caption').textContent = ui.state.measurement
     ? `MEASURED ${new Date(ui.state.measurement.measuredAt).toLocaleString()}`
     : '';
-  drawCurve();
+  drawCurves();
 }
 
 function addBand(driverName) {
@@ -416,8 +417,8 @@ function dspSettingsMatch(status) {
     && status.BufferSize === ui.state.BufferSize);
 }
 
-function drawCurve() {
-  const canvas = $('#response-chart');
+function drawCurve(driver, canvasId) {
+  const canvas = $(canvasId);
   if (!canvas) return;
   const rect = canvas.getBoundingClientRect();
   if (!rect.width || !rect.height) return;
@@ -456,19 +457,24 @@ function drawCurve() {
       ? -20 * Math.log10(1 + power)
       : -10 * Math.log10(1 + power);
   };
-  const filterModelResponse = (hz) => {
-    const wooferName = 'Woofer';
-    const tweeterName = 'Tweeter';
-    const wooferDb = bandResponse(hz, wooferName) + filterResponse(hz, ui.state.crossovers[wooferName], true);
-    const tweeterDb = bandResponse(hz, tweeterName) + filterResponse(hz, ui.state.crossovers[tweeterName], false);
-    const wooferMagnitude = Math.pow(10, wooferDb / 20);
-    const tweeterMagnitude = Math.pow(10, tweeterDb / 20);
-    const bothLinkwitzRiley = ui.state.crossovers[wooferName].topology === 'Linkwitz-Riley'
-      && ui.state.crossovers[tweeterName].topology === 'Linkwitz-Riley';
-    const combinedDb = bothLinkwitzRiley
-      ? 20 * Math.log10(wooferMagnitude + tweeterMagnitude)
-      : 10 * Math.log10(wooferMagnitude ** 2 + tweeterMagnitude ** 2);
-    return Math.max(minDb, Math.min(maxDb, combinedDb));
+  const wooferName = 'Woofer';
+  const tweeterName = 'Tweeter';
+  const getResponse = (hz) => {
+    if (driver === 'Combined') {
+      const wooferDb = bandResponse(hz, wooferName) + filterResponse(hz, ui.state.crossovers[wooferName], true);
+      const tweeterDb = bandResponse(hz, tweeterName) + filterResponse(hz, ui.state.crossovers[tweeterName], false);
+      const wooferMagnitude = Math.pow(10, wooferDb / 20);
+      const tweeterMagnitude = Math.pow(10, tweeterDb / 20);
+      const bothLinkwitzRiley = ui.state.crossovers[wooferName].topology === 'Linkwitz-Riley'
+        && ui.state.crossovers[tweeterName].topology === 'Linkwitz-Riley';
+      const combinedDb = bothLinkwitzRiley
+        ? 20 * Math.log10(wooferMagnitude + tweeterMagnitude)
+        : 10 * Math.log10(wooferMagnitude ** 2 + tweeterMagnitude ** 2);
+      return Math.max(minDb, Math.min(maxDb, combinedDb));
+    }
+    const crossover = ui.state.crossovers[driver];
+    const isLowPass = driver === wooferName;
+    return Math.max(minDb, Math.min(maxDb, bandResponse(hz, driver) + filterResponse(hz, crossover, isLowPass)));
   };
   const drawSeries = (points, color, dashed = false) => {
     if (!points || !points.length) return;
@@ -514,11 +520,11 @@ function drawCurve() {
   ctx.fillStyle = '#66695e';
   ctx.textAlign = 'left';
   ctx.font = '10px "DM Mono", monospace';
-  ctx.fillText('SPEAKER', pad.left + 5, pad.top + 12);
+  ctx.fillText(driver === 'Combined' ? 'COMBINED' : driver.toUpperCase(), pad.left + 5, pad.top + 12);
   const pointCount = Math.max(720, Math.ceil(chartW * dpr * 3));
   const filterCurve = Array.from({ length: pointCount }, (_, pointIndex) => {
     const hz = 20 * (1000 ** (pointIndex / (pointCount - 1)));
-    return { hz, db: filterModelResponse(hz) };
+    return { hz, db: getResponse(hz) };
   });
   drawSeries(filterCurve, '#8a9b4a');
   const measData = measurementResponse();
@@ -532,6 +538,12 @@ function drawCurve() {
     ctx.fillText(label, xFor(hz), pad.top + laneHeight + 13);
   });
   ctx.setLineDash([]);
+}
+
+function drawCurves() {
+  drawCurve('Combined', '#response-chart-combined');
+  drawCurve('Woofer', '#response-chart-woofer');
+  drawCurve('Tweeter', '#response-chart-tweeter');
 }
 
 async function refreshMetrics() {
@@ -824,6 +836,9 @@ async function performDestructiveAction() {
 }
 
 async function testSpeaker(driver, button) {
+  if (ui.testBusy) return;
+  ui.testBusy = true;
+  disableAllTests();
   button.disabled = true;
   button.textContent = '\u2026';
   clearTimeout(ui.saveTimer);
@@ -837,12 +852,15 @@ async function testSpeaker(driver, button) {
     setSaveStatus(savedChanges ? 'Speaker test failed' : 'Save failed', true);
     notify(error.message, true);
   } finally {
-    button.textContent = 'Test';
-    button.disabled = false;
+    ui.testBusy = false;
+    enableAllTests();
   }
 }
 
 async function testPgm(button) {
+  if (ui.testBusy) return;
+  ui.testBusy = true;
+  disableAllTests();
   button.disabled = true;
   button.textContent = '\u2026';
   try {
@@ -851,9 +869,21 @@ async function testPgm(button) {
   } catch (error) {
     notify(error.message, true);
   } finally {
-    button.textContent = 'Test PGM Input';
-    button.disabled = false;
+    ui.testBusy = false;
+    enableAllTests();
   }
+}
+
+function disableAllTests() {
+  document.querySelectorAll('[data-test-speaker]').forEach(b => { b.disabled = true; b.textContent = '\u2026'; });
+  $('#test-pgm').disabled = true;
+  $('#test-pgm').textContent = '\u2026';
+}
+
+function enableAllTests() {
+  document.querySelectorAll('[data-test-speaker]').forEach(b => { b.disabled = false; b.textContent = 'Test'; });
+  $('#test-pgm').disabled = false;
+  $('#test-pgm').textContent = 'Test PGM Input';
 }
 
 async function quickSavePreset() {
@@ -967,7 +997,7 @@ function bindEvents() {
     const section = button.dataset.collapse;
     ui.expanded[section] = !ui.expanded[section];
     renderCollapseState();
-    if (section === 'peq') drawCurve();
+    if (section === 'peq') drawCurves();
   }));
   ['limiter-enabled', 'limiter-threshold', 'limiter-release'].forEach((id) => {
     $(`#${id}`).addEventListener('change', (event) => {

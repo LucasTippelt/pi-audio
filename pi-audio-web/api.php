@@ -33,7 +33,7 @@ const VALID_MONITOR_CHANNELS = ['pgm-l', 'pgm-r', 'tweeter', 'woofer', 'mic-1', 
 
 const TEST_SPEAKER_DRIVERS = ['Tweeter', 'Woofer', 'PGM_L', 'PGM_R', 'Mic_1', 'Mic_2', 'Mic_3', 'Mic_4', 'Mic_5', 'Mic_6'];
 
-const TEST_PGM_DRIVERS = ['PGM_L', 'Tweeter', 'Woofer'];
+const TEST_PGM_DRIVERS = ['PGM_L'];
 
 function configDir(): string { return getenv('PI_AUDIO_CONFIG_DIR') ?: '/etc/pi-audio/config'; }
 function presetsDir(): string { return getenv('PI_AUDIO_PRESETS_DIR') ?: '/etc/pi-audio/presets'; }

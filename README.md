@@ -4,7 +4,7 @@ Single repository for the Pi Audio DSP engine and web interface.
 
 ## Architecture
 
-**Single-speaker system** with 2 outputs (tweeter + woofer), each with independent DSP chains. Stereo PGM input: left channel routes through DSP to both outputs, right channel is dry passthrough (linked speaker placeholder). Configurable 2-6 measurement microphone inputs.
+**Single-speaker system** with 2 outputs (tweeter + woofer), each with independent DSP chains. Stereo PGM input: left channel routes through DSP to both outputs, right channel is a direct output for a future linked speaker (with onboard DSP/room correction). Configurable 2-6 measurement microphone inputs.
 
 ## Quick Install
 
@@ -265,20 +265,37 @@ sudo bash pi-audio-dsp/redeploy.sh
 
 ## Audio Data Flow
 
+### Normal Playback
+
 ```
 PGM stereo input (ALSA capture or shared memory ring buffer)
     │
     ├──► PGM Left ──► DSP chain ──┬──► Tweeter (output 0)
     │                              └──► Woofer  (output 1)
     │
-    └──► PGM Right ──► dry passthrough ──► mixed into Woofer output
-                               (linked speaker placeholder)
+    └──► PGM Right ──► direct output (linked speaker, future onboard DSP)
 
 Mic inputs (2-6 configurable, shared memory ring buffers):
     shm://pi-audio-mic-{1..6} ──► monitor + relay
+```
+
+### Test Mode
+
+The engine detects active tests via `/dev/shm/pi-audio-test-mode` control file. During tests, real-time PGM routing is suspended.
+
+```
+Tweeter test:  test injection ──► tweeter DSP ──► tweeter speaker (woofer silent)
+Woofer test:   test injection ──► woofer DSP  ──► woofer speaker  (tweeter silent)
+PGM_L test:    PGM ring buffer ──► monitoring only (no physical speakers)
+```
+
+Monitoring channels always show actual DSP output:
+- Tweeter monitoring: tweeter output after DSP
+- Woofer monitoring: woofer output after DSP
+- PGM_L monitoring: raw PGM_L input
 
 Test adapter (pi-audio-test)
-    │ writes whitenoise to shared memory ring buffers
+    │ writes whitenoise to shared memory, signals engine via control file
     ▼
 AudioEngine playback thread
     │ per-output DSP (volume/mute/stages)
@@ -337,6 +354,9 @@ Shared memory ring buffers (visible at `/dev/shm/`):
 | `pi-audio-pgm` | PGM stereo input ring buffer (4MB interleaved stereo float32) |
 | `pi-audio-mic-{1..6}` | Mic mono input ring buffers (4MB mono float32 each) |
 | `pi-audio-monitor-{channel}` | Per-channel monitor ring buffers (4MB mono float32) |
+| `pi-audio-test-tweeter` | Tweeter test injection buffer (4MB mono float32) |
+| `pi-audio-test-woofer` | Woofer test injection buffer (4MB mono float32) |
+| `pi-audio-test-mode` | Test mode control file (contains "tweeter", "woofer", or "pgm-l") |
 
 ### Ring Buffer Format
 
@@ -381,11 +401,14 @@ sudo systemctl stop pi-audio-engine
 cat /run/pi-audio/engine-state.json
 /usr/local/bin/pi-audio-status
 
-# Speaker test
+# Speaker test (runs test, waits for engine to consume, then exits)
 /usr/local/bin/pi-audio-test Tweeter
 /usr/local/bin/pi-audio-test Woofer
 /usr/local/bin/pi-audio-test PGM_L
 /usr/local/bin/pi-audio-test Mic_1
+
+# If tests fail with "write failed", clean stale shared memory:
+sudo rm -f /dev/shm/pi-audio-test-* /dev/shm/pi-audio-test-mode
 
 # HTTP stream server health
 curl http://localhost:8767/status
@@ -413,4 +436,5 @@ aplay -l && arecord -l
 | Phase 1 | ALSA PCM, volume/mute, sample rate/buffer size, web UI, monitor ring buffers, HTTP stream, WebSocket monitoring |
 | Phase 2 | DSP effects (EQ, crossover, delay, trim, phase inversion) |
 | Phase 3 | Room measurement and correction (mic input, RTA, impulse response) |
-| Phase 4 | PGM right channel hardware output (dedicated DAC channel for linked speaker) |
+| Phase 4 | PGM right channel hardware output (dedicated DAC channel for linked speaker with onboard DSP/room correction) |
+| Phase 5 | Test mode isolation (per-channel test injection with suspended PGM routing, dedicated monitoring) |

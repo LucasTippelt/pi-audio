@@ -129,6 +129,8 @@ int testAdapter(const std::string& driver) {
         std::vector<float> stereoBuf(bufferSize * 2);
         size_t left = totalFrames;
         int err = 0;
+        /* Signal engine: enter PGM test mode */
+        setTestMode("pgm-l");
         while (left > 0) {
             size_t frames = (left < bufferSize) ? left : bufferSize;
             for (size_t i = 0; i < frames; ++i) {
@@ -139,23 +141,43 @@ int testAdapter(const std::string& driver) {
             if (!err) err = writePgmShmTest(stereoBuf.data(), frames);
             left -= frames;
         }
+        /* Signal engine: exit test mode */
+        clearTestMode();
         std::cout << "{\"ok\":" << (err ? "false" : "true") << ",\"driver\":\"" << driver << "\",\"channel\":\"" << channel << "\"}";
         return err;
     }
 
-    /* Tweeter/Woofer tests: write to per-channel test injection buffer */
+    /* Tweeter/Woofer tests: write ALL frames in one call to avoid race with engine */
     {
         std::string shmName = (driver == "Tweeter") ? "pi-audio-test-tweeter" : "pi-audio-test-woofer";
-        std::vector<float> buffer(bufferSize);
-        size_t left = totalFrames;
-        int err = 0;
-        while (left > 0) {
-            size_t frames = (left < bufferSize) ? left : bufferSize;
-            for (size_t i = 0; i < frames; ++i) buffer[i] = dist(rng);
-            if (!err) err = writeTestInject(shmName, buffer.data(), frames);
-            left -= frames;
+        std::vector<float> buffer(totalFrames);
+        for (size_t i = 0; i < totalFrames; ++i) buffer[i] = dist(rng);
+        int err = writeTestInject(shmName, buffer.data(), totalFrames);
+        if (err) {
+            std::cout << "{\"ok\":false,\"driver\":\"" << driver << "\",\"error\":\"write failed\"}";
+            return err;
         }
-        std::cout << "{\"ok\":" << (err ? "false" : "true") << ",\"driver\":\"" << driver << "\",\"channel\":\"" << channel << "\"}";
-        return err;
+        /* Signal engine: enter test mode */
+        setTestMode(channel);
+        /* Wait for engine to consume all data */
+        {
+            int fd = shm_open(shmName.c_str(), O_RDONLY, 0);
+            if (fd >= 0) {
+                while (true) {
+                    void* ptr = mmap(nullptr, kTestInjectHeaderSize, PROT_READ, MAP_SHARED, fd, 0);
+                    if (ptr == MAP_FAILED) { close(fd); break; }
+                    TestInjectHeader* hdr = static_cast<TestInjectHeader*>(ptr);
+                    bool done = (hdr->frameCount == 0 || hdr->readPos >= hdr->frameCount);
+                    munmap(ptr, kTestInjectHeaderSize);
+                    if (done) break;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+                close(fd);
+            }
+        }
+        /* Signal engine: exit test mode */
+        clearTestMode();
+        std::cout << "{\"ok\":true,\"driver\":\"" << driver << "\",\"channel\":\"" << channel << "\",\"frames\":" << totalFrames << "}";
+        return 0;
     }
 }

@@ -1,6 +1,6 @@
 # Pi Audio DSP Engine
 
-Real-time audio engine for a single-speaker system with 2 outputs (tweeter + woofer), each with independent DSP chains. Stereo PGM input: left channel through DSP, right channel dry passthrough. Configurable 2-6 measurement microphones. Built for Raspberry Pi with ALSA support. Uses POSIX shared memory (`shm_open` + `mmap`) for zero-copy inter-process audio ring buffers. Part of the [pi-audio](..) monorepo.
+Real-time audio engine for a single-speaker system with 2 outputs (tweeter + woofer), each with independent DSP chains. Stereo PGM input: left channel routes through DSP to both outputs, right channel is a direct output for a future linked speaker. Configurable 2-6 measurement microphones. Built for Raspberry Pi with ALSA support. Uses POSIX shared memory (`shm_open` + `mmap`) for zero-copy inter-process audio ring buffers. Part of the [pi-audio](..) monorepo.
 
 ## Requirements
 
@@ -94,27 +94,39 @@ pi-audio-dsp/
 
 | Driver | Ring Buffer | Description |
 |---|---|---|
-| `Tweeter` | `shm://pi-audio-pgm` | Routes through PGM L (left channel) |
-| `Woofer` | `shm://pi-audio-pgm` | Routes through PGM L (left channel) |
-| `PGM_L` | `shm://pi-audio-pgm` | Stereo PGM, left channel only |
-| `PGM_R` | `shm://pi-audio-pgm` | Stereo PGM, right channel only |
+| `Tweeter` | `shm://pi-audio-test-tweeter` | Per-channel test injection, routes through tweeter DSP only |
+| `Woofer` | `shm://pi-audio-test-woofer` | Per-channel test injection, routes through woofer DSP only |
+| `PGM_L` | `shm://pi-audio-pgm` | Stereo PGM, left channel only, monitoring only (no speakers) |
+| `PGM_R` | `shm://pi-audio-pgm` | Stereo PGM, right channel only, monitoring only (no speakers) |
 | `Mic_1`..`Mic_6` | `shm://pi-audio-mic-{1..6}` | Individual mic channels |
+
+Test mode is signalled via `/dev/shm/pi-audio-test-mode` control file. The engine suspends PGM routing during tweeter/woofer tests, and silences physical speakers during PGM tests. The test tool writes all frames in a single call, signals the engine, then waits for consumption before exiting.
 
 ## Engine Architecture
 
 ### Audio Signal Flow
 
+**Normal mode:**
 ```
 PGM stereo input (ALSA capture or shared memory ring buffer)
     │
     ├──► PGM Left ──► DSP chain ──┬──► Tweeter (output 0)
     │                              └──► Woofer  (output 1)
     │
-    └──► PGM Right ──► dry passthrough ──► mixed into Woofer output
+    └──► PGM Right ──► direct output (linked speaker, future onboard DSP)
 
 Mic inputs (2-6 configurable):
     shm://pi-audio-mic-{1..6} ──► monitor + relay + HTTP stream
 ```
+
+**Test mode** (engine detects from `/dev/shm/pi-audio-test-mode`):
+```
+Tweeter test:  shm://pi-audio-test-tweeter ──► tweeter DSP ──► tweeter (woofer silent, PGM suspended)
+Woofer test:   shm://pi-audio-test-woofer   ──► woofer DSP  ──► woofer  (tweeter silent, PGM suspended)
+PGM_L test:    shm://pi-audio-pgm           ──► monitoring only (no physical speakers)
+```
+
+Monitoring always shows actual DSP output for the selected channel.
 
 ### Threads
 
@@ -134,13 +146,19 @@ Mic inputs (2-6 configurable):
 ### Playback Thread Loop
 
 1. **Sleep** using absolute timing (`clock_nanosleep` with `CLOCK_MONOTONIC` + `TIMER_ABSTIME`)
-2. **Pop** PGM left/right from in-memory SPSC rings (lock-free atomics)
-3. **Pop** mic data from in-memory SPSC rings
-4. **Route** PGM L → tweeterBuf + wooferBuf, PGM R → dry passthrough into wooferBuf
-5. **Process** per-output DSP (volume/mute + extensible stages, double-buffered stage swap)
-6. **Interleave** tweeter (ch0) + woofer (ch1) for ALSA
-7. **Write** to ALSA PCM (`snd_pcm_writei`)
-8. **Push** to relay rings, monitor rings, HTTP stream server, and WebSocket server (all lock-free or mutex-guarded)
+2. **Check test mode** from `/dev/shm/pi-audio-test-mode` control file
+3. **Pop** PGM left/right from in-memory SPSC rings (suspended during tweeter/woofer tests)
+4. **Pop** mic data from in-memory SPSC rings
+5. **Read test injection** from per-channel shared memory buffers
+6. **Route** based on test mode:
+   - Normal: PGM L → tweeterBuf + wooferBuf
+   - Tweeter test: test injection → tweeterBuf, wooferBuf = silence
+   - Woofer test: test injection → wooferBuf, tweeterBuf = silence
+   - PGM_L test: both buffers = silence (PGM data available for monitoring)
+7. **Process** per-output DSP (volume/mute + extensible stages, double-buffered stage swap)
+8. **Interleave** tweeter (ch0) + woofer (ch1) for ALSA
+9. **Write** to ALSA PCM (`snd_pcm_writei`)
+10. **Push** to relay rings (actual DSP output for tweeter/woofer), monitor rings, HTTP stream server, and WebSocket server
 
 ### In-Memory Rings
 
@@ -161,6 +179,9 @@ POSIX shared memory objects (`shm_open` + `mmap`), visible at `/dev/shm/`:
 | `pi-audio-pgm` | Stereo interleaved float32, 4MB | ALSA capture / external | PGM reader thread |
 | `pi-audio-mic-{1..6}` | Mono float32, 4MB each | External / test adapter | Mic reader threads |
 | `pi-audio-monitor-{channel}` | Mono float32, 4MB each | Monitor thread | Web UI / debug page |
+| `pi-audio-test-tweeter` | Mono float32, 4MB, `PIIJ` header | Test adapter | Playback thread |
+| `pi-audio-test-woofer` | Mono float32, 4MB, `PIIJ` header | Test adapter | Playback thread |
+| `pi-audio-test-mode` | Text ("tweeter", "woofer", "pgm-l") | Test adapter | Playback thread |
 
 On startup, the engine creates all shared memory objects and syncs read positions. External writers (test adapter, external sources) access the same objects via `shm_open()`.
 
@@ -236,6 +257,9 @@ Generated by `scripts/gen-version.sh` at build time:
 | `/dev/shm/pi-audio-pgm` | PGM stereo input ring (4MB, shared memory) |
 | `/dev/shm/pi-audio-mic-{1..6}` | Mic input rings (4MB each, shared memory) |
 | `/dev/shm/pi-audio-monitor-{channel}` | Monitor rings (4MB each, shared memory) |
+| `/dev/shm/pi-audio-test-tweeter` | Tweeter test injection (4MB, shared memory) |
+| `/dev/shm/pi-audio-test-woofer` | Woofer test injection (4MB, shared memory) |
+| `/dev/shm/pi-audio-test-mode` | Test mode control file |
 
 ## Logging
 
@@ -254,6 +278,11 @@ sudo journalctl -u pi-audio-engine -f
 cat /run/pi-audio/engine-state.json
 /usr/local/bin/pi-audio-status
 /usr/local/bin/pi-audio-test Tweeter
+/usr/local/bin/pi-audio-test Woofer
+/usr/local/bin/pi-audio-test PGM_L
+
+# If tests fail with "write failed", clean stale shared memory:
+sudo rm -f /dev/shm/pi-audio-test-* /dev/shm/pi-audio-test-mode
 
 # HTTP stream server
 curl http://localhost:8767/status

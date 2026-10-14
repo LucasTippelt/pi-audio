@@ -56,7 +56,11 @@ if (empty($_SESSION['csrf'])) {
             <div><h2 id="response-title">Frequency response</h2></div>
             <div class="response-meta"><span class="legend"><i class="legend-line measured"></i>MEASURED</span><span class="legend"><i class="legend-line estimate"></i>CROSSOVER + PEQ</span></div>
           </div>
-          <div class="chart-wrap"><canvas id="response-chart" aria-label="Frequency response chart from 20 hertz to 20 kilohertz with logarithmic frequency ticks and 3 decibel grid increments" role="img"></canvas></div>
+          <div class="chart-grid">
+            <div class="chart-wrap"><canvas id="response-chart-combined" aria-label="Combined frequency response" role="img"></canvas></div>
+            <div class="chart-wrap"><canvas id="response-chart-woofer" aria-label="Woofer frequency response" role="img"></canvas></div>
+            <div class="chart-wrap"><canvas id="response-chart-tweeter" aria-label="Tweeter frequency response" role="img"></canvas></div>
+          </div>
           <div class="chart-footer"><span id="curve-caption"></span></div>
         </section>
 

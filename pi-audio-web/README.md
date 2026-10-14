@@ -82,7 +82,17 @@ sudo systemctl reload apache2
 
 Supported drivers: `Tweeter`, `Woofer`, `PGM_L`, `PGM_R`, `Mic_1`..`Mic_6`.
 
+**Test mode routing:**
+- **Tweeter test**: signal plays through tweeter DSP only, woofer silent, PGM suspended
+- **Woofer test**: signal plays through woofer DSP only, tweeter silent, PGM suspended
+- **PGM_L test**: no physical speakers, PGM monitoring shows raw input
+- **PGM_R test**: no physical speakers, PGM monitoring shows raw input
+
+The engine detects test mode via `/dev/shm/pi-audio-test-mode` control file. The test tool signals the engine before writing data and clears the mode after consumption.
+
 Each driver requires a matching `PI_AUDIO_TEST_BIN_<DRIVER>` environment variable in Apache config (e.g. `PI_AUDIO_TEST_BIN_TWEETER`). The `test-pgm` action uses `PI_AUDIO_TEST_BIN_PGM_L` or falls back to `/usr/local/bin/pi-audio-test`.
+
+**Troubleshooting:** If tests fail with `"write failed"`, stale shared memory from a previous `sudo` run may block creation. Clean with: `sudo rm -f /dev/shm/pi-audio-test-* /dev/shm/pi-audio-test-mode`
 
 ### Room measurement
 
@@ -95,6 +105,8 @@ Metrics use sampled CPU counters from `/proc/stat`, `/sys/class/thermal/thermal_
 ### Shared memory ring buffers
 
 The engine uses POSIX shared memory (`shm_open` + `mmap`) instead of file-based ring buffers for all audio data transfer. Ring buffers are visible at `/dev/shm/pi-audio-*`. External writers (test adapter, external sources) access the same shared memory objects.
+
+Test injection uses per-channel shared memory buffers (`pi-audio-test-tweeter`, `pi-audio-test-woofer`) with a 12-byte `PIIJ` header (`magic[4]`, `frameCount[4]`, `readPos[4]`) followed by raw float32 data. The engine reads frames and advances `readPos`, resetting both to 0 when fully consumed. A control file (`pi-audio-test-mode`) signals the active test type to the engine.
 
 To verify CPU monitoring, install `stress-ng` and run a short load test:
 
@@ -115,7 +127,8 @@ All endpoints handled by `api.php` via `action` query parameter.
 | `save` | POST | Save preset (staging or production) |
 | `master` | POST | Update master volume/mute |
 | `apply` | POST | Push config to running engine |
-| `test-speaker` | POST | Run speaker test |
+| `test-speaker` | POST | Run speaker test (tweeter/woofer/mic) |
+| `test-pgm` | POST | Run PGM_L input test (monitoring only, no speakers) |
 | `preset-*` | POST | Preset CRUD operations |
 
 ## HTTP Stream Monitoring (Recommended)
@@ -164,6 +177,9 @@ Set in Apache virtual host config (`/etc/apache2/sites-enabled/pi-audio.conf`):
 | `/run/pi-audio/engine-state.json` | Engine parameters (written every second) |
 | `/run/pi-audio/reload` | Reload trigger |
 | `/dev/shm/pi-audio-monitor-{channel}` | Per-channel monitor ring buffers (4MB each, POSIX shared memory) |
+| `/dev/shm/pi-audio-test-tweeter` | Tweeter test injection buffer (4MB, POSIX shared memory) |
+| `/dev/shm/pi-audio-test-woofer` | Woofer test injection buffer (4MB, POSIX shared memory) |
+| `/dev/shm/pi-audio-test-mode` | Test mode control file |
 
 ## Permissions
 
@@ -206,6 +222,10 @@ Access at `http://<ip>/audio-debug.html`:
 - Per-channel selection (PGM L/R, tweeter, woofer, mic-1..mic-6)
 - Auto sample rate detection with AudioContext recreation on change
 - Metrics: sample rate, queue level, RMS level, buffers queued, drop count, events
+
+### Test Buttons
+
+The web UI provides test buttons for tweeter, woofer, and PGM input. A 1-second cooldown prevents overlapping tests. All test buttons are disabled while any test is running.
 
 ## Security
 

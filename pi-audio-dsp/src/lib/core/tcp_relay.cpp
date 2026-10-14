@@ -140,7 +140,7 @@ void TcpRelay::sendLoop() {
                 for (auto& item : batch) {
                     detail += " ch" + std::to_string(item.first) + "=" + std::to_string(item.second.size()) + "f";
                 }
-                std::cerr << "[TCP-RELAY-BATCH] sent" << detail << std::endl;
+                Logger::getInstance().info("[TCP-RELAY-BATCH] sent" + detail);
             }
         }
 
