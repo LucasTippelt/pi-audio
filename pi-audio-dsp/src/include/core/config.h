@@ -34,8 +34,7 @@ struct MeasurementConfig {
         float hz = 0.0f;
         float db = 0.0f;
     };
-    std::vector<ResponsePoint> left;
-    std::vector<ResponsePoint> right;
+    std::vector<ResponsePoint> response;
 };
 
 struct FullConfig {
@@ -43,6 +42,7 @@ struct FullConfig {
     std::string output = "default";
     int sampleRate = 48000;
     int bufferSize = 512;
+    int micCount = 2;
     int volume = 65;
     bool muted = false;
 

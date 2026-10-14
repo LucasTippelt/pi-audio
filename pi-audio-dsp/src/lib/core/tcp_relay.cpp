@@ -3,8 +3,10 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <sys/socket.h>
+#include <sys/poll.h>
 #include <netinet/in.h>
 #include <unistd.h>
+#include <cerrno>
 #include <cstring>
 #include <chrono>
 #include <thread>
@@ -12,6 +14,25 @@
 #include <sstream>
 #include <iomanip>
 #include <iostream>
+
+static bool waitForConnect(int sock, int timeoutMs) {
+    for (int attempt = 0; attempt < timeoutMs / 50; ++attempt) {
+        struct pollfd pfd;
+        pfd.fd = sock;
+        pfd.events = POLLOUT;
+        pfd.revents = 0;
+        int ret = poll(&pfd, 1, 50);
+        if (ret > 0 && (pfd.revents & (POLLOUT | POLLHUP | POLLERR))) {
+            int err = 0;
+            socklen_t len = sizeof(err);
+            if (getsockopt(sock, SOL_SOCKET, SO_ERROR, &err, &len) < 0) return false;
+            return (err == 0);
+        }
+        if (ret < 0) return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return false;
+}
 
 TcpRelay::TcpRelay() {
     for (int i = 0; i < MAX_CHANNELS; i++) m_channelEnabled[i] = false;
@@ -24,6 +45,7 @@ TcpRelay::~TcpRelay() {
 bool TcpRelay::connect(const std::string& host, int port) {
     m_host = host;
     m_port = port;
+    m_ctrlBufLen = 0;
 
     m_sock = socket(AF_INET, SOCK_STREAM, 0);
     if (m_sock < 0) {
@@ -46,31 +68,32 @@ bool TcpRelay::connect(const std::string& host, int port) {
         return false;
     }
 
-    if (::connect(m_sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        if (errno != EINPROGRESS) {
-            Logger::getInstance().error("TcpRelay: connect failed " + host + ":" + std::to_string(port));
-            close(m_sock);
-            m_sock = -1;
-            return false;
-        }
+    bool connected = false;
+    int connRet = ::connect(m_sock, (struct sockaddr*)&addr, sizeof(addr));
+    if (connRet == 0) {
+        connected = true;
+    } else if (connRet < 0 && errno == EINPROGRESS) {
+        connected = waitForConnect(m_sock, 1000);
     }
 
-    m_connected = true;
+    if (connected) {
+        m_connected = true;
+        Logger::getInstance().info("TcpRelay: connected to " + host + ":" + std::to_string(port));
+    } else {
+        Logger::getInstance().warning("TcpRelay: connect to " + host + ":" +
+            std::to_string(port) + " failed — will retry in background");
+        close(m_sock);
+        m_sock = -1;
+        m_connected = false;
+    }
+
     m_running = true;
-    m_ctrlBufLen = 0;
     m_sendThread = std::thread(&TcpRelay::sendLoop, this);
     m_ctrlThread = std::thread(&TcpRelay::ctrlLoop, this);
-    Logger::getInstance().info("TcpRelay: connected to " + host + ":" + std::to_string(port));
     return true;
 }
 
-/* Called from playback thread: append mono data for a channel, never block. */
 void TcpRelay::pushChannel(uint8_t channelId, const float* mono, size_t frames) {
-    /* Push rate logger: log every 5 seconds */
-    static std::chrono::steady_clock::time_point pushRateStart = std::chrono::steady_clock::now();
-    static uint64_t pushTotalSamples = 0;
-    static uint64_t pushTotalFrames = 0;
-
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (!m_running) return;
@@ -79,75 +102,56 @@ void TcpRelay::pushChannel(uint8_t channelId, const float* mono, size_t frames) 
         buf.insert(buf.end(), mono, mono + frames);
     }
     m_dataCV.notify_one();
-
-    pushTotalSamples += frames;
-    pushTotalFrames++;
-    auto now = std::chrono::steady_clock::now();
-    double dt = std::chrono::duration<double>(now - pushRateStart).count();
-    if (dt >= 5.0) {
-        pushRateStart = now;
-        double rate = pushTotalSamples / dt;
-        std::ostringstream oss;
-        oss << "[PUSH] " << pushTotalSamples << " samples/"
-            << std::fixed << std::setprecision(1) << dt << "s = "
-            << std::fixed << std::setprecision(0) << rate << " samples/s ("
-            << pushTotalFrames << " callbacks, avg=" << (pushTotalSamples / pushTotalFrames) << " frames/cb)";
-        std::cerr << oss.str() << std::endl;
-        pushTotalSamples = 0;
-        pushTotalFrames = 0;
-    }
 }
 
 void TcpRelay::sendLoop() {
-    /* Rate logger: log every 5 seconds */
-    auto rateStartTime = std::chrono::steady_clock::now();
-    uint64_t rateTotalSamples = 0;
-    uint64_t rateTotalMsgs = 0;
-    double maxSendMs = 0;
-
     while (m_running.load()) {
-        std::map<uint8_t, std::vector<float>> batch;
+        if (!m_connected || m_sock < 0) {
+            reconnect();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            continue;
+        }
+
+        std::vector<std::pair<uint8_t, std::vector<float>>> batch;
         {
             std::unique_lock<std::mutex> lock(m_mutex);
-            if (!m_connected || m_sock < 0) {
-                lock.unlock();
-                reconnect();
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                continue;
-            }
-            m_dataCV.wait_for(lock, std::chrono::milliseconds(1), [this] {
+            m_dataCV.wait_for(lock, std::chrono::milliseconds(5), [this] {
                 for (auto& pair : m_buffers) {
                     if (!pair.second.empty()) return true;
                 }
                 return false;
             });
-            bool anyData = false;
             for (auto& pair : m_buffers) {
-                if (!pair.second.empty() && pair.first < MAX_CHANNELS && m_channelEnabled[pair.first]) {
-                    batch[pair.first].swap(pair.second);
-                    anyData = true;
-                }
+                uint8_t ch = pair.first;
+                if (ch >= MAX_CHANNELS || !m_channelEnabled[ch]) continue;
+                auto& buf = pair.second;
+                if (buf.empty()) continue;
+                // Send everything available for this channel immediately
+                std::vector<float> chunk(std::move(buf));
+                batch.emplace_back(ch, std::move(chunk));
             }
-            if (!anyData) continue;
+            if (batch.empty()) continue;
+
+            // Log batch composition
+            static int batchLogCounter = 0;
+            batchLogCounter++;
+            if (batchLogCounter % 10 == 0) {
+                std::string detail;
+                for (auto& item : batch) {
+                    detail += " ch" + std::to_string(item.first) + "=" + std::to_string(item.second.size()) + "f";
+                }
+                std::cerr << "[TCP-RELAY-BATCH] sent" << detail << std::endl;
+            }
         }
 
-        for (auto& pair : batch) {
-            uint8_t channelId = pair.first;
-            if (channelId >= MAX_CHANNELS) continue;
-            bool enabled = false;
-            {
-                std::lock_guard<std::mutex> lock(m_mutex);
-                enabled = m_channelEnabled[channelId];
-            }
-            if (!enabled) continue;
-            auto& samples = pair.second;
+        for (auto& item : batch) {
+            uint8_t channelId = item.first;
+            auto& samples = item.second;
             size_t frames = samples.size();
             if (frames == 0) continue;
 
-            /* Build single packet: [1 byte channel ID][4 bytes BE sample count][frames × 4 bytes mono float32] */
             size_t dataLen = frames * sizeof(float);
             size_t pktLen = 5 + dataLen;
-            /* Reuse or allocate send buffer */
             static thread_local std::vector<uint8_t> sendBuf;
             if (sendBuf.size() < pktLen) sendBuf.resize(pktLen);
             sendBuf[0] = channelId;
@@ -155,8 +159,6 @@ void TcpRelay::sendLoop() {
             std::memcpy(sendBuf.data() + 1, &countBe, 4);
             std::memcpy(sendBuf.data() + 5, samples.data(), dataLen);
 
-            /* Send entire packet in one call — measure send time */
-            auto sendStart = std::chrono::high_resolution_clock::now();
             size_t totalSent = 0;
             bool fail = false;
             while (totalSent < pktLen) {
@@ -177,60 +179,12 @@ void TcpRelay::sendLoop() {
             }
 
             if (fail) {
-                /* Put unsent samples back */
                 size_t sentSamples = (totalSent > 5 && totalSent < pktLen) ? (totalSent - 5) / sizeof(float) : 0;
                 if (sentSamples < frames) {
                     std::lock_guard<std::mutex> lock(m_mutex);
                     auto& chBuf = m_buffers[channelId];
                     chBuf.insert(chBuf.begin(), samples.data() + sentSamples, samples.data() + frames);
                 }
-                Logger::getInstance().warning("TcpRelay: data send fail for ch=" + std::to_string(channelId) + ", reconnect");
-                close(m_sock);
-                m_sock = -1;
-                reconnect();
-                break;
-            }
-
-            if (!fail) {
-                rateTotalSamples += frames;
-                rateTotalMsgs++;
-                auto sendEnd = std::chrono::high_resolution_clock::now();
-                double sendMs = std::chrono::duration<double, std::milli>(sendEnd - sendStart).count();
-                if (sendMs > maxSendMs) maxSendMs = sendMs;
-                if (sendMs > 2.0) {
-                    std::ostringstream oss;
-                    oss << "[RELAY-SLOW] send=" << std::fixed << std::setprecision(1) << sendMs << "ms pkt=" << pktLen << " max=" << std::setprecision(1) << maxSendMs << "ms";
-                    std::cerr << oss.str() << std::endl;
-                }
-            }
-
-            if (fail) {
-                auto sendEnd = std::chrono::high_resolution_clock::now();
-                double sendMs = std::chrono::duration<double, std::milli>(sendEnd - sendStart).count();
-                std::ostringstream oss;
-                oss << "[RELAY-FAIL] send=" << std::fixed << std::setprecision(1) << sendMs << "ms totalSent=" << totalSent << "/" << pktLen;
-                std::cerr << oss.str() << std::endl;
-            }
-
-            /* Periodic rate log every 5 seconds to stderr (-> journal) */
-            auto now = std::chrono::steady_clock::now();
-            double dt = std::chrono::duration<double>(now - rateStartTime).count();
-            if (dt >= 5.0) {
-                rateStartTime = now;
-                double rate = rateTotalSamples / dt;
-                std::ostringstream oss;
-                oss << "[RELAY] send=" << rateTotalSamples << " samples/"
-                    << std::fixed << std::setprecision(1) << dt << "s = "
-                    << std::fixed << std::setprecision(0) << rate << " samples/s ("
-                    << rateTotalMsgs << " msgs) maxSend="
-                    << std::fixed << std::setprecision(1) << maxSendMs << "ms";
-                std::cerr << oss.str() << std::endl;
-                rateTotalSamples = 0;
-                rateTotalMsgs = 0;
-            }
-
-            if (fail) {
-                Logger::getInstance().warning("TcpRelay: data send fail for ch=" + std::to_string(channelId) + ", reconnect");
                 close(m_sock);
                 m_sock = -1;
                 reconnect();
@@ -244,12 +198,8 @@ void TcpRelay::disconnect() {
     m_running = false;
     m_connected = false;
     m_dataCV.notify_all();
-    if (m_ctrlThread.joinable()) {
-        m_ctrlThread.join();
-    }
-    if (m_sendThread.joinable()) {
-        m_sendThread.join();
-    }
+    if (m_ctrlThread.joinable()) m_ctrlThread.join();
+    if (m_sendThread.joinable()) m_sendThread.join();
     if (m_sock >= 0) {
         close(m_sock);
         m_sock = -1;
@@ -263,7 +213,11 @@ bool TcpRelay::isConnected() const {
 }
 
 void TcpRelay::ctrlLoop() {
-    while (m_running.load() && m_sock >= 0) {
+    while (m_running.load()) {
+        if (m_sock < 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            continue;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         char tmp[64];
         ssize_t n = ::recv(m_sock, tmp, sizeof(tmp), MSG_DONTWAIT | MSG_PEEK);
@@ -321,11 +275,20 @@ void TcpRelay::reconnect() {
         m_sock = -1;
         return;
     }
-    if (::connect(m_sock, (struct sockaddr*)&addr, sizeof(addr)) < 0 && errno != EINPROGRESS) {
+
+    int connRet = ::connect(m_sock, (struct sockaddr*)&addr, sizeof(addr));
+    if (connRet == 0) {
+        // connected
+    } else if (connRet < 0 && errno == EINPROGRESS) {
+        if (!waitForConnect(m_sock, 2000)) {
+            close(m_sock);
+            m_sock = -1;
+            return;
+        }
+    } else {
         close(m_sock);
         m_sock = -1;
         return;
     }
     m_connected = true;
-    Logger::getInstance().info("TcpRelay: connected to " + m_host + ":" + std::to_string(m_port));
 }

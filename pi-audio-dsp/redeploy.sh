@@ -32,7 +32,6 @@ sudo chmod 775 /run/pi-audio
 echo "Restarting services..."
 sudo systemctl restart pi-audio-engine
 sudo systemctl restart apache2
-sudo systemctl restart pi-audio-ws-server
 sleep 1
 
 echo ""
@@ -48,4 +47,3 @@ echo ""
 echo "Service status:"
 echo "  Engine:       $(sudo systemctl is-active pi-audio-engine)"
 echo "  Apache:       $(sudo systemctl is-active apache2)"
-echo "  WS Server:    $(sudo systemctl is-active pi-audio-ws-server)"

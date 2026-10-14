@@ -19,18 +19,18 @@ try {
 } catch(e) {}
 console.log('pi-audio-ws-server v' + versionInfo.version + ' (built ' + versionInfo.buildTime + ')');
 
-/* Channel name to index mapping */
+/* Channel name to index mapping - single speaker system */
 const CHANNELS = {
-  'pgm-l': 0,
-  'pgm-r': 1,
-  'woofer-l': 2,
-  'tweeter-l': 3,
-  'woofer-r': 4,
-  'tweeter-r': 5,
-  'mic-1': 6,
-  'mic-2': 7,
-  'mic-3': 8,
-  'mic-4': 9,
+    'pgm-l': 0,
+    'pgm-r': 1,
+    'tweeter': 2,
+    'woofer': 3,
+    'mic-1': 4,
+    'mic-2': 5,
+    'mic-3': 6,
+    'mic-4': 7,
+    'mic-5': 8,
+    'mic-6': 9,
 };
 
 /* Reverse map: index to name */
@@ -80,6 +80,7 @@ wss.on('connection', (ws, req) => {
   console.log('ws-connect ' + peer + ' ch=' + ch + ' idx=' + chIdx);
   clients[chIdx].push(ws);
   activeChannels.add(chIdx);
+  ws.send(JSON.stringify({ok: true, sampleRate: SAMPLE_RATE, bufferSize: 512}));
   // Tell engine to enable this channel
   if (engineSocket && engineSocket.writable) {
     try {
@@ -198,7 +199,7 @@ const tcpServer = net.createServer((socket) => {
     bufLen += data.length;
 
     while (bufLen >= 5) {
-      /* Protocol: [1 byte channel ID][4 bytes BE sample count][sampleCount × 4 bytes mono float32] */
+      /* Protocol: [1 byte channel ID][4 bytes BE sample count][sampleCount x 4 bytes mono float32] */
       const channelId = buf.readUInt8(0);
       const sampleCount = buf.readUInt32BE(1);
       const msgLen = 5 + sampleCount * 4;
@@ -229,8 +230,17 @@ const tcpServer = net.createServer((socket) => {
   socket.on('close', () => {
     clearInterval(tcpTimer);
     clearInterval(rateTimer);
-    if (engineSocket === socket) engineSocket = null;
-    console.log('tcp-disconnect ' + peer);
+    if (engineSocket === socket) {
+      engineSocket = null;
+      console.log('tcp-disconnect ' + peer + ' — engine lost, waiting for reconnect');
+      for (const chIdx of Object.values(CHANNELS)) {
+        for (const ws of clients[chIdx]) {
+          if (ws.readyState === WebSocket.OPEN) {
+            try { ws.send(JSON.stringify({ type: 'engine-disconnected' })); } catch(e) {}
+          }
+        }
+      }
+    }
   });
 
   socket.on('error', (e) => {

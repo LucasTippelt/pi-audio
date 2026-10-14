@@ -221,28 +221,18 @@ session_start();
   }
    echo "</table>\n";
 
-  // ---- TEST SPEAKER BINARIES ----
-  sectionHeading('Test Speaker Binaries');
+  // ---- TEST SPEAKER BINARY ----
+  sectionHeading('Test Speaker Binary');
   echo "<table>\n";
-  $testDrivers = [
-      'Woofer_L' => getenv('PI_AUDIO_TEST_BIN_WOOFER_L'),
-      'Tweeter_L' => getenv('PI_AUDIO_TEST_BIN_TWEETER_L'),
-      'Woofer_R' => getenv('PI_AUDIO_TEST_BIN_WOOFER_R'),
-      'Tweeter_R' => getenv('PI_AUDIO_TEST_BIN_TWEETER_R'),
-  ];
-  foreach ($testDrivers as $driver => $path) {
-      if (!$path) {
-          row($driver, '<em>not configured</em>', 'warn');
-      } else {
-          $exists = is_file($path);
-          $exec = is_executable($path);
-          $cls = $exec ? 'ok' : 'err';
-          row($driver . ' (' . basename($path) . ')',
-              ($exists ? 'exists' : 'MISSING') . ' | ' . ($exec ? 'executable' : 'NOT executable'),
-              $cls);
-      }
-  }
-   echo "</table>\n";
+  $testBin = '/usr/local/bin/pi-audio-test';
+  $testExists = is_file($testBin);
+  $testExec = is_executable($testBin);
+  $cls = $testExec ? 'ok' : ($testExists ? 'warn' : 'err');
+  row('pi-audio-test',
+      ($testExists ? 'exists' : 'MISSING') . ' | ' . ($testExec ? 'executable' : 'NOT executable'),
+      $cls);
+  row('Supported Drivers', 'Tweeter, Woofer, PGM_L, PGM_R, Mic_1..Mic_6');
+  echo "</table>\n";
 
   // ---- BINARY RUNTIME STATUS ----
   sectionHeading('Binary Runtime Status');
@@ -276,48 +266,53 @@ session_start();
   }
   echo "</table>\n";
 
-  // ---- MONITOR RING BUFFER ----
-  sectionHeading('Monitor Ring Buffer');
+  // ---- MONITOR RING BUFFERS ----
+  sectionHeading('Monitor Ring Buffers');
   echo "<table>\n";
-  $monitorPath = '/run/pi-audio/audio-monitor.raw';
-  if (is_file($monitorPath)) {
-      $mSize = filesize($monitorPath);
-      $mPerms = substr(sprintf('%o', fileperms($monitorPath)), -4);
-      $mOwner = function_exists('posix_getpwuid') ? posix_getpwuid(fileowner($monitorPath))['name'] : fileowner($monitorPath);
-      $mGroup = function_exists('posix_getgrgid') ? posix_getgrgid(filegroup($monitorPath))['name'] : filegroup($monitorPath);
-      $mReadable = is_readable($monitorPath) ? 'Yes' : 'No';
-      row('Path', $monitorPath, 'ok');
-      row('Size', number_format($mSize) . ' bytes (' . round($mSize / 1024 / 1024, 2) . ' MB)');
-      row('Permissions', "$mPerms $mOwner:$mGroup", $mReadable ? 'ok' : 'err');
-      row('Readable by www-data', $mReadable, $mReadable ? 'ok' : 'err');
+  echo "<tr><th>Channel</th><th>Path</th><th>Status</th><th>Sample Rate</th><th>Write Pos</th><th>Sequence</th></tr>\n";
+  $monitorChannels = ['pgm-l', 'pgm-r', 'tweeter', 'woofer', 'mic-1', 'mic-2', 'mic-3', 'mic-4', 'mic-5', 'mic-6'];
+  $foundAny = false;
+  foreach ($monitorChannels as $ch) {
+      $mp = '/run/pi-audio/monitor-' . $ch . '.raw';
+      if (is_file($mp)) {
+          $foundAny = true;
+          $mSize = filesize($mp);
+          $mReadable = is_readable($mp) ? 'Yes' : 'No';
+          $statusCls = $mReadable ? 'ok' : 'warn';
+          $srVal = '—';
+          $wpVal = '—';
+          $seqVal = '—';
 
-      /* Read header */
-      $mfp = fopen($monitorPath, 'rb');
-      if ($mfp) {
-          fseek($mfp, 0);
-          $mhdr = fread($mfp, 64);
-          fclose($mfp);
-          if ($mhdr && strlen($mhdr) >= 24 && substr($mhdr, 0, 4) === 'PIAM') {
-              $mWriteL = unpack('V', substr($mhdr, 6, 4))[1];
-              $mWriteH = unpack('V', substr($mhdr, 10, 4))[1];
-              $mWritePos = ($mWriteH << 32) | $mWriteL;
-              $mSr = unpack('V', substr($mhdr, 14, 4))[1];
-              $mCh = unpack('V', substr($mhdr, 18, 4))[1];
-              $mSeq = unpack('V', substr($mhdr, 20, 4))[1];
-              row('Magic', substr($mhdr, 0, 4), 'ok');
-              row('Sample Rate', $mSr . ' Hz');
-              row('Channels', $mCh);
-              row('Write Position', number_format($mWritePos) . ' bytes');
-              row('Sequence', $mSeq);
-              $utilPct = round(($mWritePos / $mSize) * 100, 1);
-              row('Buffer Usage', round($mWritePos / 1024 / 1024, 2) . ' MB (' . $utilPct . '%)');
-          } else {
-              row('Header', 'Invalid magic bytes', 'err');
+          $mfp = fopen($mp, 'rb');
+          if ($mfp) {
+              fseek($mfp, 0);
+              $mhdr = fread($mfp, 64);
+              fclose($mfp);
+              if ($mhdr && strlen($mhdr) >= 24 && substr($mhdr, 0, 4) === 'PIAM') {
+                  $mWriteL = unpack('V', substr($mhdr, 6, 4))[1];
+                  $mWriteH = unpack('V', substr($mhdr, 10, 4))[1];
+                  $mWritePos = ($mWriteH << 32) | $mWriteL;
+                  $mSr = unpack('V', substr($mhdr, 14, 4))[1];
+                  $mSeq = unpack('V', substr($mhdr, 20, 4))[1];
+                  $srVal = $mSr . ' Hz';
+                  $wpVal = number_format($mWritePos) . ' bytes';
+                  $seqVal = (string)$mSeq;
+              } else {
+                  $statusCls = 'err';
+              }
           }
+          echo "<tr>";
+          echo "<th>$ch</th>";
+          echo "<td style=\"font-size:0.75rem;\">$mp</td>";
+          echo "<td class=\"$statusCls\">" . ($mReadable ? 'readable' : 'not readable') . "</td>";
+          echo "<td>$srVal</td>";
+          echo "<td>$wpVal</td>";
+          echo "<td>$seqVal</td>";
+          echo "</tr>\n";
       }
-  } else {
-      row('Path', $monitorPath, 'warn');
-      row('Status', 'Not found — engine may not have started yet', 'warn');
+  }
+  if (!$foundAny) {
+      echo "<tr><td colspan=\"6\" class=\"warn\">No monitor ring buffers found — engine may not have started yet</td></tr>\n";
   }
   echo "</table>\n";
 

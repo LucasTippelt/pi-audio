@@ -56,14 +56,14 @@ if (empty($_SESSION['csrf'])) {
             <div><h2 id="response-title">Frequency response</h2></div>
             <div class="response-meta"><span class="legend"><i class="legend-line measured"></i>MEASURED</span><span class="legend"><i class="legend-line estimate"></i>CROSSOVER + PEQ</span></div>
           </div>
-          <div class="chart-wrap"><canvas id="response-chart" aria-label="Left and right frequency response charts from 20 hertz to 20 kilohertz with logarithmic frequency ticks and 3 decibel grid increments" role="img"></canvas></div>
+          <div class="chart-wrap"><canvas id="response-chart" aria-label="Frequency response chart from 20 hertz to 20 kilohertz with logarithmic frequency ticks and 3 decibel grid increments" role="img"></canvas></div>
           <div class="chart-footer"><span id="curve-caption"></span></div>
         </section>
 
         <aside class="side-rail">
           <section class="control-section input-section">
             <div class="section-head"><div><h2>Audio input</h2></div></div>
-            <label class="field-label" for="audio-input">INPUT (*ALSA CAPTURE DEVICE, STREAMLINE SELECTION IN FINAL PHASE OF DEVELOPMENT*)</label>
+            <label class="field-label" for="audio-input">INPUT</label>
             <select class="select-control" id="audio-input"><option value="default">Loading devices…</option></select>
             <div class="input-options">
               <div><label class="field-label" for="sample-rate">SAMPLE RATE</label>
@@ -92,6 +92,33 @@ if (empty($_SESSION['csrf'])) {
             </div>
             <p class="field-note" id="input-note">Selecting an input, sample rate, or buffer size applies the choice to the audio engine.</p>
             <button class="test-pgm" type="button" id="test-pgm" aria-label="Test PGM Input" title="Play stereo whitenoise on Program output">Test PGM Input</button>
+
+            <label class="field-label" for="mic-count">MEASUREMENT MICS</label>
+            <select class="select-control" id="mic-count">
+              <option value="2">2 mics</option>
+              <option value="3">3 mics</option>
+              <option value="4" selected>4 mics</option>
+              <option value="5">5 mics</option>
+              <option value="6">6 mics</option>
+            </select>
+            <p class="field-note" id="mic-note">Number of configurable measurement microphone inputs.</p>
+
+            <label class="field-label" for="monitor-select">MONITORING</label>
+            <select class="select-control" id="monitor-select">
+              <option value="none">— No monitoring —</option>
+              <option value="pgm-l">PGM Left (DSP)</option>
+              <option value="pgm-r">PGM Right (passthrough)</option>
+              <option value="tweeter">Tweeter output</option>
+              <option value="woofer">Woofer output</option>
+              <option value="mic-1">Mic 1</option>
+              <option value="mic-2">Mic 2</option>
+              <option value="mic-3">Mic 3</option>
+              <option value="mic-4">Mic 4</option>
+              <option value="mic-5">Mic 5</option>
+              <option value="mic-6">Mic 6</option>
+            </select>
+            <p class="field-note" id="monitor-note">Select one channel to listen in the browser. Non-realtime monitoring.</p>
+
             <label class="field-label" for="audio-output">ALSA PLAYBACK DEVICE</label>
             <select class="select-control" id="audio-output"><option value="default">Loading devices…</option></select>
             <p class="field-note" id="output-note">For debugging only; remove after development.</p>
@@ -100,7 +127,6 @@ if (empty($_SESSION['csrf'])) {
           <section class="control-section crossover-section">
             <div class="section-head">
               <div><h2>Crossovers</h2></div>
-              <div class="segmented" role="group" aria-label="Crossover channel"><button type="button" data-crossover-side="left" class="active" aria-pressed="true">Left</button><button type="button" data-crossover-side="right" aria-pressed="false">Right</button></div>
             </div>
             <div class="crossover-list" id="crossover-list"></div>
           </section>
@@ -111,7 +137,6 @@ if (empty($_SESSION['csrf'])) {
         <div class="section-head">
           <div><h2>Parametric EQ</h2></div>
           <div class="section-head-actions">
-            <div class="segmented" role="group" aria-label="Parametric EQ channel"><button type="button" data-peq-side="left" class="active" aria-pressed="true">Left</button><button type="button" data-peq-side="right" aria-pressed="false">Right</button></div>
             <button class="collapse-button" type="button" data-collapse="peq" aria-controls="peq-content" aria-expanded="true" aria-label="Minimize parametric EQ controls">-</button>
           </div>
         </div>

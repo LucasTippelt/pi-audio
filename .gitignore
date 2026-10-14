@@ -2,6 +2,7 @@
 pi-audio-dsp/build/
 pi-audio-dsp/*.log
 pi-audio-web/assets/*.map
+pi-audio-web/node_modules/
 libaudio_core.a
 *.swp
 *.swo

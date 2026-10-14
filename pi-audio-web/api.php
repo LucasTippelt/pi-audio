@@ -5,29 +5,40 @@ header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
 
 const DEFAULT_STATE = [
-    'input' => 'default', 'output' => 'default', 'sampleRate' => 48000, 'BufferSize' => 512, 'volume' => 65, 'muted' => false,
+    'input' => 'default',
+    'output' => 'default',
+    'sampleRate' => 48000,
+    'BufferSize' => 512,
+    'micCount' => 2,
+    'volume' => 65,
+    'muted' => false,
     'crossovers' => [
-        'Woofer_L' => ['frequency' => 80, 'topology' => 'Linkwitz-Riley', 'slope' => 24],
-        'Tweeter_L' => ['frequency' => 80, 'topology' => 'Linkwitz-Riley', 'slope' => 24],
-        'Woofer_R' => ['frequency' => 80, 'topology' => 'Linkwitz-Riley', 'slope' => 24],
-        'Tweeter_R' => ['frequency' => 80, 'topology' => 'Linkwitz-Riley', 'slope' => 24],
+        'Woofer' => ['frequency' => 2500, 'topology' => 'Linkwitz-Riley', 'slope' => 24],
+        'Tweeter' => ['frequency' => 2500, 'topology' => 'Linkwitz-Riley', 'slope' => 24],
     ],
     'bands' => [
-        'Woofer_L' => [], 'Tweeter_L' => [], 'Woofer_R' => [], 'Tweeter_R' => [],
+        'Woofer' => [],
+        'Tweeter' => [],
     ],
     'drivers' => [
-        ['name' => 'Woofer_L', 'delayMs' => 0, 'trimDb' => 0, 'phaseInverted' => false],
-        ['name' => 'Tweeter_L', 'delayMs' => 0, 'trimDb' => 0, 'phaseInverted' => false],
-        ['name' => 'Woofer_R', 'delayMs' => 0, 'trimDb' => 0, 'phaseInverted' => false],
-        ['name' => 'Tweeter_R', 'delayMs' => 0, 'trimDb' => 0, 'phaseInverted' => false],
+        ['name' => 'Woofer', 'delayMs' => 0, 'trimDb' => 0, 'phaseInverted' => false],
+        ['name' => 'Tweeter', 'delayMs' => 0, 'trimDb' => 0, 'phaseInverted' => false],
     ],
     'limiter' => ['enabled' => true, 'threshold' => -1, 'release' => 80],
+    'monitorChannel' => 'tweeter',
     'measurement' => null,
 ];
+
+const VALID_MONITOR_CHANNELS = ['pgm-l', 'pgm-r', 'tweeter', 'woofer', 'mic-1', 'mic-2', 'mic-3', 'mic-4', 'mic-5', 'mic-6'];
+
+const TEST_SPEAKER_DRIVERS = ['Tweeter', 'Woofer', 'PGM_L', 'PGM_R', 'Mic_1', 'Mic_2', 'Mic_3', 'Mic_4', 'Mic_5', 'Mic_6'];
+
+const TEST_PGM_DRIVERS = ['PGM_L', 'Tweeter', 'Woofer'];
 
 function configDir(): string { return getenv('PI_AUDIO_CONFIG_DIR') ?: '/etc/pi-audio/config'; }
 function presetsDir(): string { return getenv('PI_AUDIO_PRESETS_DIR') ?: '/etc/pi-audio/presets'; }
 function currentPath(): string { return configDir() . '/current.json'; }
+
 function mixerStatus(): array {
     $configuredCard = getenv('PI_AUDIO_CARD');
     if ($configuredCard !== false && $configuredCard !== '') {
@@ -271,32 +282,31 @@ function normalizeState(array $source, ?array $previous = null): array {
     $out['output'] = isset($source['output']) && is_string($source['output']) && preg_match('/^[A-Za-z0-9_.:,-=]{1,80}$/', $source['output']) ? $source['output'] : $base['output'];
     $out['sampleRate'] = in_array($source['sampleRate'] ?? null, [44100, 48000, 88200, 96000, 176400, 192000], true) ? $source['sampleRate'] : $base['sampleRate'];
     $out['BufferSize'] = in_array($source['BufferSize'] ?? null, [64, 128, 256, 512, 1024, 2048, 4096], true) ? $source['BufferSize'] : $base['BufferSize'];
+    $out['micCount'] = in_array($source['micCount'] ?? null, [2, 3, 4, 5, 6], true) ? $source['micCount'] : $base['micCount'];
     $out['volume'] = max(0, min(100, (int)($source['volume'] ?? $base['volume'])));
     $out['muted'] = (bool)($source['muted'] ?? $base['muted']);
-    $legacyCross = is_array($source['crossover'] ?? null) ? $source['crossover'] : [];
+    $out['monitorChannel'] = in_array($source['monitorChannel'] ?? null, VALID_MONITOR_CHANNELS, true) ? $source['monitorChannel'] : $base['monitorChannel'];
+
     $sourceCrossovers = is_array($source['crossovers'] ?? null) ? $source['crossovers'] : [];
     $out['crossovers'] = [];
     foreach (DEFAULT_STATE['crossovers'] as $name => $defaults) {
-        $legacyName = str_replace('_', ' ', $name);
-        $cross = is_array($sourceCrossovers[$name] ?? null)
-            ? $sourceCrossovers[$name]
-            : (is_array($sourceCrossovers[$legacyName] ?? null) ? $sourceCrossovers[$legacyName] : $legacyCross);
-        $fallback = $base['crossovers'][$name] ?? $base['crossovers'][$legacyName] ?? $defaults;
+        $cross = $sourceCrossovers[$name] ?? [];
+        if (!is_array($cross)) $cross = [];
+        $fallback = $base['crossovers'][$name] ?? $defaults;
         $out['crossovers'][$name] = [
-            'frequency' => max(30, min(500, (int)($cross['frequency'] ?? $fallback['frequency']))),
+            'frequency' => max(30, min(20000, (int)($cross['frequency'] ?? $fallback['frequency']))),
             'topology' => in_array($cross['topology'] ?? '', ['Linkwitz-Riley', 'Butterworth', 'Bessel'], true) ? $cross['topology'] : $fallback['topology'],
             'slope' => in_array((int)($cross['slope'] ?? 0), [12, 18, 24, 36, 48], true) ? (int)$cross['slope'] : $fallback['slope'],
         ];
     }
-    unset($out['crossover']);
+
     $sourceBands = is_array($source['bands'] ?? null) ? $source['bands'] : [];
-    $isLegacyBandList = !$sourceBands || array_keys($sourceBands) === range(0, count($sourceBands) - 1);
-    $legacyBands = $isLegacyBandList ? $sourceBands : null;
     $out['bands'] = [];
     foreach (array_keys(DEFAULT_STATE['bands']) as $driverName) {
-        $driverBands = $legacyBands ?? ($sourceBands[$driverName] ?? $sourceBands[str_replace('_', ' ', $driverName)] ?? []);
+        $driverBands = $sourceBands[$driverName] ?? [];
+        if (!is_array($driverBands)) $driverBands = [];
         $out['bands'][$driverName] = [];
-        foreach (array_slice(is_array($driverBands) ? $driverBands : [], 0, 12) as $band) {
+        foreach (array_slice($driverBands, 0, 12) as $band) {
             if (!is_array($band)) continue;
             $out['bands'][$driverName][] = [
                 'id' => preg_match('/^[A-Za-z0-9_-]{1,32}$/', (string)($band['id'] ?? '')) ? $band['id'] : bin2hex(random_bytes(5)),
@@ -307,6 +317,7 @@ function normalizeState(array $source, ?array $previous = null): array {
             ];
         }
     }
+
     $driverDefaults = DEFAULT_STATE['drivers'];
     $drivers = is_array($source['drivers'] ?? null) ? $source['drivers'] : [];
     $driversByName = [];
@@ -315,12 +326,10 @@ function normalizeState(array $source, ?array $previous = null): array {
     }
     $out['drivers'] = [];
     foreach ($driverDefaults as $driver) {
-        $spacedName = str_replace('_', ' ', $driver['name']);
-        $legacyName = ['Woofer_L' => 'Woofer', 'Tweeter_L' => 'Tweeter'][$driver['name']] ?? '';
-        $item = $driversByName[$driver['name']] ?? $driversByName[$spacedName] ?? $driversByName[$legacyName] ?? [];
+        $item = $driversByName[$driver['name']] ?? [];
         $existing = null;
         foreach ($base['drivers'] as $baseDriver) {
-            if (in_array($baseDriver['name'] ?? null, [$driver['name'], $spacedName, $legacyName], true)) { $existing = $baseDriver; break; }
+            if (($baseDriver['name'] ?? null) === $driver['name']) { $existing = $baseDriver; break; }
         }
         $out['drivers'][] = [
             'name' => $driver['name'],
@@ -329,15 +338,17 @@ function normalizeState(array $source, ?array $previous = null): array {
             'phaseInverted' => is_bool($item['phaseInverted'] ?? null) ? $item['phaseInverted'] : (bool)($existing['phaseInverted'] ?? $driver['phaseInverted']),
         ];
     }
+
     $limiter = is_array($source['limiter'] ?? null) ? $source['limiter'] : $base['limiter'];
-    $out['limiter'] = ['enabled' => (bool)($limiter['enabled'] ?? true), 'threshold' => max(-24, min(0, round((float)($limiter['threshold'] ?? -1), 1))), 'release' => max(10, min(2000, (int)($limiter['release'] ?? 80)))];
+    $out['limiter'] = [
+        'enabled' => (bool)($limiter['enabled'] ?? true),
+        'threshold' => max(-24, min(0, round((float)($limiter['threshold'] ?? -1), 1))),
+        'release' => max(10, min(2000, (int)($limiter['release'] ?? 80))),
+    ];
+
     $out['measurement'] = $base['measurement'] ?? null;
     if (is_array($source['measurement'] ?? null)) $out['measurement'] = validMeasurement($source['measurement']);
-    if (is_array($source['roomCorrection'] ?? null)) {
-        $out['roomCorrection'] = $source['roomCorrection'];
-    } elseif (($source['roomCorrection'] ?? null) === null && array_key_exists('roomCorrection', $source)) {
-        unset($out['roomCorrection']);
-    }
+
     return $out;
 }
 
@@ -363,7 +374,6 @@ function readPresetVersions(string $name): array {
     if (!is_array($saved)) throw new RuntimeException('Preset file is not valid JSON.');
     if (!array_key_exists('staging', $saved) && !array_key_exists('production', $saved)) {
         $legacy = normalizeState($saved, DEFAULT_STATE);
-        if (!array_key_exists('roomCorrection', $saved)) unset($legacy['roomCorrection']);
         $versions = ['staging' => $legacy, 'production' => $legacy];
         writeJson($path, $versions);
         return $versions;
@@ -374,7 +384,6 @@ function readPresetVersions(string $name): array {
     $versions = [];
     foreach (['staging', 'production'] as $version) {
         $versions[$version] = normalizeState($saved[$version], DEFAULT_STATE);
-        if (!array_key_exists('roomCorrection', $saved[$version])) unset($versions[$version]['roomCorrection']);
     }
     return $versions;
 }
@@ -529,7 +538,26 @@ try {
         }
         $alsa = cachedMixerStatus();
         $alsaTarget = $alsa['target'];
-        respond(['state' => $state, 'currentJsonWritten' => currentJsonIsValid(), 'inputs' => listPcms('arecord'), 'outputs' => listPcms('aplay'), 'presets' => $presets['names'], 'selectedPreset' => $presets['selected'], 'presetVersion' => $presets['version'], 'currentSource' => $_SESSION['currentSource'] ?? ['name' => $presets['selected'], 'version' => $presets['version'], 'saved' => true], 'lastLoad' => $_SESSION['lastLoad'] ?? null, 'activeConfiguration' => $_SESSION['activeConfiguration'] ?? null, 'lastApplyAttempt' => $_SESSION['lastApplyAttempt'] ?? null, 'csrf' => $_SESSION['csrf'], 'measurementReady' => (bool)getenv('PI_AUDIO_MEASURE_BIN'), 'applyReady' => (bool)getenv('PI_AUDIO_APPLY_BIN') && is_executable((string)getenv('PI_AUDIO_APPLY_BIN')), 'alsaReady' => $alsaTarget !== null, 'alsaControl' => $alsaTarget === null ? null : $alsaTarget['control'] . ' (' . ($alsaTarget['card'] === null ? 'default device' : 'card ' . $alsaTarget['card']) . ')', 'alsaMessage' => $alsa['message'], 'serverTime' => time()]);
+        respond([
+            'state' => $state,
+            'currentJsonWritten' => currentJsonIsValid(),
+            'inputs' => listPcms('arecord'),
+            'outputs' => listPcms('aplay'),
+            'presets' => $presets['names'],
+            'selectedPreset' => $presets['selected'],
+            'presetVersion' => $presets['version'],
+            'currentSource' => $_SESSION['currentSource'] ?? ['name' => $presets['selected'], 'version' => $presets['version'], 'saved' => true],
+            'lastLoad' => $_SESSION['lastLoad'] ?? null,
+            'activeConfiguration' => $_SESSION['activeConfiguration'] ?? null,
+            'lastApplyAttempt' => $_SESSION['lastApplyAttempt'] ?? null,
+            'csrf' => $_SESSION['csrf'],
+            'measurementReady' => (bool)getenv('PI_AUDIO_MEASURE_BIN'),
+            'applyReady' => (bool)getenv('PI_AUDIO_APPLY_BIN') && is_executable((string)getenv('PI_AUDIO_APPLY_BIN')),
+            'alsaReady' => $alsaTarget !== null,
+            'alsaControl' => $alsaTarget === null ? null : $alsaTarget['control'] . ' (' . ($alsaTarget['card'] === null ? 'default device' : 'card ' . $alsaTarget['card']) . ')',
+            'alsaMessage' => $alsa['message'],
+            'serverTime' => time(),
+        ]);
     }
     if ($action === 'metrics' && $_SERVER['REQUEST_METHOD'] === 'GET') respond(metrics());
     if ($action === 'dsp-status' && $_SERVER['REQUEST_METHOD'] === 'GET') dspConnectionStatus();
@@ -634,15 +662,12 @@ try {
     }
     if ($action === 'test-speaker') {
         $driverName = $body['driver'] ?? '';
-        $validNames = array_column(DEFAULT_STATE['drivers'], 'name');
-        if (!is_string($driverName) || !in_array($driverName, $validNames, true)) respond(['error' => 'Invalid speaker test target.'], 422);
+        if (!is_string($driverName) || !in_array($driverName, TEST_SPEAKER_DRIVERS, true)) respond(['error' => 'Invalid speaker test target.'], 422);
         $environmentVariable = 'PI_AUDIO_TEST_BIN_' . strtoupper($driverName);
         $binary = getenv($environmentVariable);
         if (!$binary) respond(['error' => 'Speaker test adapter is not configured. Set ' . $environmentVariable . '.'], 503);
         if (!is_executable($binary)) respond(['error' => 'Speaker test adapter is not executable by Apache: ' . $binary], 503);
-        $state = readState();
-        $payload = ['driver' => $driverName, 'output' => $state['output']];
-        $result = runCommand([$binary], json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR), 15);
+        $result = runCommand([$binary, $driverName], '', 15);
         if (!$result['ok']) {
             $detail = $result['error'] ?: $result['output'] ?: 'Adapter exited unsuccessfully.';
             respond(['error' => 'Speaker test failed: ' . $detail], 502);
@@ -650,20 +675,20 @@ try {
         respond(['tested' => $driverName]);
     }
     if ($action === 'test-pgm') {
-        $binary = getenv('PI_AUDIO_TEST_BIN_WOOFER_L') ?: '/usr/local/bin/pi-audio-test';
+        $binary = getenv('PI_AUDIO_TEST_BIN_PGM_L') ?: '/usr/local/bin/pi-audio-test';
         if (!is_executable($binary)) respond(['error' => 'Test adapter not executable: ' . $binary], 503);
-        foreach (['PGM_L', 'PGM_R', 'Woofer_L', 'Tweeter_L', 'Woofer_R', 'Tweeter_R'] as $drv) {
+        foreach (TEST_PGM_DRIVERS as $drv) {
             $result = runCommand([$binary, $drv], '', 15);
             if (!$result['ok']) {
                 $detail = $result['error'] ?: $result['output'] ?: 'Adapter failed';
                 respond(['error' => 'PGM test failed for ' . $drv . ': ' . $detail], 502);
             }
         }
-        respond(['tested' => 'PGM_L,PGM_R,Woofer_L,Tweeter_L,Woofer_R,Tweeter_R']);
+        respond(['tested' => implode(',', TEST_PGM_DRIVERS)]);
     }
     if ($action === 'preset-save') {
         $name = trim((string)($body['name'] ?? ''));
-        if (!validPresetName($name)) respond(['error' => 'Use 1–32 letters, numbers, spaces, hyphens or underscores.'], 422);
+        if (!validPresetName($name)) respond(['error' => 'Use 1-32 letters, numbers, spaces, hyphens or underscores.'], 422);
         if ($name === 'Default') respond(['error' => 'The protected Default preset cannot be overwritten.'], 409);
         if (findPresetPath($name) !== null) respond(['error' => 'A preset with that name already exists. Select its staging version to edit it.'], 409);
         $state = normalizeState(is_array($body['state'] ?? null) ? $body['state'] : [], readState());
@@ -771,7 +796,6 @@ try {
     if ($action === 'restore-defaults') {
         ensureDefaultPreset();
         $state = normalizeState(DEFAULT_STATE, DEFAULT_STATE);
-        unset($state['roomCorrection']);
         $versions = readPresetVersions('Default');
         $versions['staging'] = $state;
         savePresetVersions('Default', $versions);
