@@ -4,6 +4,7 @@ After=sound.target
 
 [Service]
 Type=simple
+ExecStartPre=/bin/bash -c 'mkdir -p /run/pi-audio && chown pi:audio /run/pi-audio && chmod 775 /run/pi-audio'
 ExecStart=/usr/local/bin/pi-audio-engine /etc/pi-audio/config/current.json /var/log/pi-audio/engine.log
 Restart=on-failure
 User=pi

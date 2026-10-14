@@ -21,9 +21,11 @@ sudo chmod 755 /usr/local/bin/pi-audio-*
 # Install systemd service
 sudo cp "$DSP_DIR/pi-audio-engine.service" /etc/systemd/system/
 sudo systemctl daemon-reload
-
-# Fix permissions for runtime directories
-sudo chown root:audio /run/pi-audio
+sudo mkdir -p /etc/pi-audio/config
+sudo mkdir -p /etc/pi-audio/presets
+sudo mkdir -p /var/log/pi-audio
+sudo mkdir -p /run/pi-audio
+sudo chown pi:audio /run/pi-audio
 sudo chmod 775 /run/pi-audio
 
 # Restart all services

@@ -68,6 +68,16 @@ EOF
     sudo chown pi:audio /etc/pi-audio/config/current.json
 fi
 
+# Install systemd service for audio engine
+sudo cp "$DSP_DIR/pi-audio-engine.service" /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo mkdir -p /etc/pi-audio/config
+sudo mkdir -p /etc/pi-audio/presets
+sudo mkdir -p /var/log/pi-audio
+sudo mkdir -p /run/pi-audio
+sudo chown pi:audio /run/pi-audio
+sudo chmod 775 /run/pi-audio
+
 # Install WebSocket server service
 sudo cp "$REPO_DIR/pi-audio-ws-server.service" /etc/systemd/system/
 sudo systemctl daemon-reload
