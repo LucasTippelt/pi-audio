@@ -182,7 +182,8 @@
       queueTimeMs = (avail / sampleRate) * 1000;
       document.getElementById('m-buf').textContent = queueTimeMs.toFixed(0) + ' ms';
       document.getElementById('m-underruns').textContent = dropCount;
-      document.getElementById('m-ringfill').textContent = ringBufCapacity ? Math.round((avail / ringBufCapacity) * 100) + '%' : '0';
+      var cap = ringBuf ? ringBuf.length : ringBufCapacity;
+      document.getElementById('m-ringfill').textContent = cap ? Math.round((avail / cap) * 100) + '%' : '0';
       document.getElementById('m-drops').textContent = dropCount;
     }
 
@@ -227,27 +228,74 @@
       var ringBufArray = new ArrayBuffer(ringBufSamples * 4);
       logIf('AudioCtx sr=' + sr + ' ringBuf=' + ringBufSamples + ' samples (' + (ringBufSamples / sr * 1000).toFixed(0) + 'ms)', 'li', 'lg-info');
 
-      audioCtx.audioWorklet.addModule('audio-playback-processor.js').then(function() {
-        scriptNode = new AudioWorkletNode(audioCtx, 'audio-playback-processor', { outputChannelCount: [1] });
-        scriptNode.port.postMessage({ type: 'init', buffer: ringBufArray, warmupMin: warmupMin });
-        scriptNode.port.onmessage = function(e) {
-          var d = e.data;
-          if (d.type === 'ready') {
-            logIf('AudioWorklet ready, ringBuf=' + ringBufSamples + ' warmup=' + warmupMin, 'ls', 'lg-cb');
-          } else if (d.type === 'status') {
-            ringSize = d.size;
-            if (d.drops > 0) { dropCount += d.drops; cbDropTotal += d.drops; }
-            updateQueueLevel();
-            var cbNow = performance.now();
-            if (cbNow - cbLastLogTime > 2000) {
-              var cbElapsed = (cbNow - cbLastLogTime) / 1000;
-              var cbDr = (cbDropTotal / (cbElapsed * sampleRate)) * 100;
-              logIf('WV avail=' + ringSize + ' dropRate=' + cbDr.toFixed(1) + '% drops=' + cbDropTotal, 'lw', 'lg-cb');
-              cbLastLogTime = cbNow;
-              cbDropTotal = 0;
+      var useWorklet = !!(audioCtx.audioWorklet && audioCtx.audioWorklet.addModule);
+      if (useWorklet) {
+        logIf('Using AudioWorklet (dedicated audio thread)', 'ls', 'lg-info');
+      } else {
+        logIf('AudioWorklet unavailable (need HTTPS), using ScriptProcessorNode', 'lw', 'lg-info');
+      }
+
+      function setupAudioNodes() {
+        if (useWorklet) {
+          scriptNode = new AudioWorkletNode(audioCtx, 'audio-playback-processor', { outputChannelCount: [1] });
+          scriptNode.port.postMessage({ type: 'init', buffer: ringBufArray, warmupMin: warmupMin });
+          scriptNode.port.onmessage = function(e) {
+            var d = e.data;
+            if (d.type === 'ready') {
+              logIf('AudioWorklet ready, ringBuf=' + ringBufSamples + ' warmup=' + warmupMin, 'ls', 'lg-cb');
+            } else if (d.type === 'status') {
+              ringSize = d.size;
+              if (d.drops > 0) { dropCount += d.drops; cbDropTotal += d.drops; }
+              updateQueueLevel();
+              var cbNow = performance.now();
+              if (cbNow - cbLastLogTime > 2000) {
+                var cbElapsed = (cbNow - cbLastLogTime) / 1000;
+                var cbDr = (cbDropTotal / (cbElapsed * sampleRate)) * 100;
+                logIf('WV avail=' + ringSize + ' dropRate=' + cbDr.toFixed(1) + '% drops=' + cbDropTotal, 'lw', 'lg-cb');
+                cbLastLogTime = cbNow;
+                cbDropTotal = 0;
+              }
             }
-          }
-        };
+          };
+        } else {
+          ringBuf = new Float32Array(ringBufSamples);
+          ringWPos = 0; ringRPos = 0; ringSize = 0;
+          var bufSize = 1024;
+          var cbCount = 0, cbDropTotalLocal = 0, cbDropEvents = 0, cbLastLogTimeLocal = 0;
+          var warmupDone = false;
+          scriptNode = audioCtx.createScriptProcessor(bufSize, 1, 1);
+          scriptNode.onaudioprocess = function(e) {
+            var out = e.outputBuffer.getChannelData(0);
+            var len = out.length;
+            if (!warmupDone) {
+              if (ringSize >= warmupMin) {
+                warmupDone = true;
+                logIf('Warmup done, ScriptProcessorNode playback started (buf=' + ringSize + ' samples)', 'ls', 'lg-cb');
+              } else {
+                out.fill(0);
+                cbCount++;
+                return;
+              }
+            }
+            var availBefore = ringSize;
+            ringReadBlock(out, len);
+            var dropped = len - Math.min(availBefore, len);
+            if (dropped > 0) { cbDropTotalLocal += dropped; cbDropEvents++; }
+            for (var i = 0; i < Math.min(len, waveData.length); i++) waveData[i] = out[i];
+            cbCount++;
+            if (cbCount % 60 === 0) {
+              var now = performance.now();
+              var elapsed = (now - cbLastLogTimeLocal) / 1000;
+              if (cbLastLogTimeLocal > 0 && elapsed > 0) {
+                var dr = (cbDropTotalLocal / (elapsed * sampleRate)) * 100;
+                logIf('CB calls=' + cbCount + ' avail=' + ringSize + ' dropRate=' + dr.toFixed(1) + '% drops=' + cbDropTotalLocal + ' events=' + cbDropEvents, 'lw', 'lg-cb');
+              }
+              cbLastLogTimeLocal = now;
+              cbDropTotalLocal = 0; cbDropEvents = 0;
+              updateQueueLevel();
+            }
+          };
+        }
         scriptNode.connect(gainNode);
 
         var canvas = document.getElementById('waveform'), c = canvas.getContext('2d');
@@ -283,10 +331,17 @@
           }).catch(function() {});
         }, 3000);
         connectWS();
-      }).catch(function(err) {
-        logIf('AudioWorklet failed: ' + err.message, 'lg', 'lg-info');
-        setStatus('AudioWorklet not supported', 'error');
-      });
+      }
+
+      if (useWorklet) {
+        audioCtx.audioWorklet.addModule('audio-playback-processor.js').then(setupAudioNodes).catch(function(err) {
+          logIf('AudioWorklet load failed: ' + err.message + ' — falling back to ScriptProcessorNode', 'lw', 'lg-info');
+          useWorklet = false;
+          setupAudioNodes();
+        });
+      } else {
+        setupAudioNodes();
+      }
     }
 
     function connectWS() {
@@ -323,6 +378,8 @@
           updateRMS(fl, fc);
           if (scriptNode && scriptNode.port) {
             scriptNode.port.postMessage({ type: 'write', buffer: fl.buffer }, [fl.buffer]);
+          } else {
+            ringWrite(fl);
           }
           chunkCount++;
           wsChunkCount++;
