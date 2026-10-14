@@ -68,24 +68,6 @@ EOF
     sudo chown pi:audio /etc/pi-audio/config/current.json
 fi
 
-# Install Apache virtual host config
-sudo tee /etc/apache2/sites-enabled/pi-audio.conf > /dev/null << 'EOF'
-<VirtualHost *:80>
-    DocumentRoot /var/www/pi-audio/pi-audio-web
-    <Directory /var/www/pi-audio/pi-audio-web>
-        AllowOverride All
-        Require all granted
-    </Directory>
-    SetEnv PI_AUDIO_STATUS_BIN /usr/local/bin/pi-audio-status
-    SetEnv PI_AUDIO_APPLY_BIN /usr/local/bin/pi-audio-apply
-    SetEnv PI_AUDIO_MEASURE_BIN /usr/local/bin/pi-audio-measure
-    SetEnv PI_AUDIO_TEST_BIN_WOOFER_L /usr/local/bin/pi-audio-test
-    SetEnv PI_AUDIO_TEST_BIN_WOOFER_R /usr/local/bin/pi-audio-test
-    SetEnv PI_AUDIO_TEST_BIN_TWEETER_L /usr/local/bin/pi-audio-test
-    SetEnv PI_AUDIO_TEST_BIN_TWEETER_R /usr/local/bin/pi-audio-test
-</VirtualHost>
-EOF
-
 # Install WebSocket server service
 sudo cp "$REPO_DIR/pi-audio-ws-server.service" /etc/systemd/system/
 sudo systemctl daemon-reload
