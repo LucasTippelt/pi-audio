@@ -432,9 +432,11 @@ function drawCurve(driver, canvasId) {
   const pad = { left: 43, right: 10, top: 8, bottom: 22 };
   const chartW = width - pad.left - pad.right;
   const laneHeight = height - pad.top - pad.bottom;
+  const minHz = driver === 'Tweeter' ? 1000 : 20;
+  const maxHz = 20000;
   const minDb = -24;
   const maxDb = 12;
-  const xFor = (hz) => pad.left + (Math.log10(hz / 20) / 3) * chartW;
+  const xFor = (hz) => pad.left + (Math.log10(hz / minHz) / Math.log10(maxHz / minHz)) * chartW;
   const yFor = (db) => pad.top + ((maxDb - db) / (maxDb - minDb)) * laneHeight;
   ctx.clearRect(0, 0, width, height);
   ctx.font = '10px "DM Mono", monospace';
@@ -512,7 +514,7 @@ function drawCurve(driver, canvasId) {
       ctx.fillText(String(db), pad.left - 7, y + 3);
     }
   }
-  [20, 30, 40, 50, 70, 100, 200, 300, 500, 700, 1000, 2000, 3000, 5000, 7000, 10000, 20000].forEach((hz) => {
+  [20, 30, 40, 50, 70, 100, 200, 300, 500, 700, 1000, 2000, 3000, 5000, 7000, 10000, 20000].filter((hz) => hz >= minHz).forEach((hz) => {
     const x = xFor(hz);
     ctx.strokeStyle = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000].includes(hz) ? '#e3e2da' : '#f0efe9';
     ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, pad.top + laneHeight); ctx.stroke();
@@ -523,7 +525,7 @@ function drawCurve(driver, canvasId) {
   ctx.fillText(driver === 'Combined' ? 'COMBINED' : driver.toUpperCase(), pad.left + 5, pad.top + 12);
   const pointCount = Math.max(720, Math.ceil(chartW * dpr * 3));
   const filterCurve = Array.from({ length: pointCount }, (_, pointIndex) => {
-    const hz = 20 * (1000 ** (pointIndex / (pointCount - 1)));
+    const hz = minHz * ((maxHz / minHz) ** (pointIndex / (pointCount - 1)));
     return { hz, db: getResponse(hz) };
   });
   drawSeries(filterCurve, '#8a9b4a');
@@ -534,7 +536,8 @@ function drawCurve(driver, canvasId) {
   ctx.fillStyle = '#999b93';
   ctx.font = '9px "DM Mono", monospace';
   frequencyLabels.forEach((label, hz) => {
-    ctx.textAlign = hz === 20 ? 'left' : hz === 20000 ? 'right' : 'center';
+    if (hz < minHz) return;
+    ctx.textAlign = hz === minHz ? 'left' : hz === maxHz ? 'right' : 'center';
     ctx.fillText(label, xFor(hz), pad.top + laneHeight + 13);
   });
   ctx.setLineDash([]);

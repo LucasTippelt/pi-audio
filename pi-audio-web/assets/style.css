@@ -72,8 +72,8 @@ h1 span { color: var(--olive); }
 .legend-line { display: inline-block; width: 15px; height: 2px; background: var(--coral); }
 .legend-line.estimate { background: var(--olive); }
 .legend-line.measured { background: repeating-linear-gradient(to right, var(--coral) 0 4px, transparent 4px 7px); }
-.chart-grid { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 12px; margin-top: 24px; min-height: 480px; padding-bottom: 12px; }
-.chart-wrap { position: relative; }
+.chart-grid { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto; gap: 12px; margin-top: 24px; min-height: 0; padding-bottom: 12px; }
+.chart-wrap { position: relative; width: 100%; height: 280px; min-width: 0; }
 .chart-wrap canvas { width: 100%; height: 100%; display: block; }
 .chart-footer { display: flex; justify-content: space-between; align-items: center; padding-top: 9px; color: #a0a198; font-size: 10px; letter-spacing: .5px; }
 .text-button { border: 0; padding: 3px 0; color: #70736b; background: transparent; cursor: pointer; font-size: 12px; }

@@ -62,8 +62,8 @@
     </div>
     <div class="ch-select">
       <span style="font-size:0.75rem;color:#888;">TRANSPORT:</span>
-      <label><input type="radio" name="transport" value="ws" checked> WebSocket (port 8765)</label>
-      <label><input type="radio" name="transport" value="http"> HTTP Stream (port 8767)</label>
+      <label><input type="radio" name="transport" value="ws" checked> WebSocket (port 8765) <span style="color:#8a9b4a;font-size:0.65rem;">Stability</span></label>
+      <label><input type="radio" name="transport" value="http"> HTTP Stream (port 8767) <span style="color:#3498db;font-size:0.65rem;">Lower Latency</span></label>
     </div>
     <div class="ch-select">
       <span style="font-size:0.75rem;color:#888;">MONITOR:</span>
@@ -85,11 +85,12 @@
     </div>
     <div class="metrics">
       <div class="metric"><div class="metric-label">Sample Rate</div><div class="metric-value" id="m-sr">&mdash;</div></div>
-      <div class="metric"><div class="metric-label">Schedule Ahead</div><div class="metric-value" id="m-queue">&mdash;</div></div>
+      <div class="metric"><div class="metric-label">Buffer Size</div><div class="metric-value" id="m-bs">&mdash;</div></div>
+      <div class="metric"><div class="metric-label">Ring Buffer</div><div class="metric-value" id="m-queue">&mdash;</div></div>
       <div class="metric"><div class="metric-label">RMS Level</div><div class="metric-value" id="m-rms">&mdash;</div></div>
       <div class="metric"><div class="metric-label">Chunks</div><div class="metric-value" id="m-chunks">0</div></div>
       <div class="metric"><div class="metric-label">Gaps</div><div class="metric-value" id="m-gaps">0</div></div>
-      <div class="metric"><div class="metric-label">Latency</div><div class="metric-value" id="m-latency">0</div></div>
+      <div class="metric"><div class="metric-label" title="Ring buffer + scheduled audio + browser-reported output delay; excludes network transit and acoustic loopback">Estimated Output Latency</div><div class="metric-value" id="m-latency">&mdash;</div></div>
       <div class="metric"><div class="metric-label">Drop Frames</div><div class="metric-value" id="m-drops">0</div></div>
       <div class="metric"><div class="metric-label">Stream Gap</div><div class="metric-value" id="m-streamgap">0</div></div>
     </div>
@@ -109,12 +110,14 @@
   <a class="back" href="index.php">&larr; Back to main UI</a>
   <script>
     var audioCtx = null, gainNode = null, running = false;
-    var chunkCount = 0, dropCount = 0, gapCount = 0, sampleRate = 48000;
+    var chunkCount = 0, dropCount = 0, gapCount = 0, sampleRate = 48000, bufferSize = 512;
     var waveData = new Float32Array(2048);
     var monitorGain = 0.5;
     var lastChunkTime = 0, maxStreamGap = 0, streamGapCount = 0;
     var lastScheduleTime = 0;
     var byteAccum = new Uint8Array(0);
+
+    function updateBsDisplay() { document.getElementById('m-bs').textContent = bufferSize + ' frames'; }
 
     var HTTP_HOST = location.hostname || '127.0.0.1';
     var HTTP_PORT = 8767;
@@ -160,9 +163,11 @@
 
     function updateMetrics() {
       if (!audioCtx || !running) return;
-      var levelMs = (ringCount / sampleRate * 1000);
-      document.getElementById('m-queue').textContent = levelMs.toFixed(0) + ' ms';
-      document.getElementById('m-latency').textContent = levelMs.toFixed(0) + ' ms';
+      var ringMs = ringCount / sampleRate * 1000;
+      var scheduledMs = Math.max(0, nextScheduleTime - audioCtx.currentTime) * 1000;
+      var deviceMs = ((audioCtx.baseLatency || 0) + (audioCtx.outputLatency || 0)) * 1000;
+      document.getElementById('m-queue').textContent = ringMs.toFixed(0) + ' ms';
+      document.getElementById('m-latency').textContent = (ringMs + scheduledMs + deviceMs).toFixed(0) + ' ms';
       document.getElementById('m-gaps').textContent = gapCount;
       document.getElementById('m-drops').textContent = dropCount;
       if (streamGapCount > 0) {
@@ -194,6 +199,7 @@
       waveData.fill(0); maxStreamGap = 0; streamGapCount = 0;
       byteAccum = new Uint8Array(0); lastScheduleTime = 0;
       ringWrite = 0; ringRead = 0; ringCount = 0;
+      bufferSize = 512;
       audioRing.fill(0);
       document.getElementById('btn-start').disabled = true;
       document.getElementById('btn-stop').disabled = false;
@@ -228,8 +234,10 @@
         .then(function(d) {
           addLog('Status JSON: sampleRate=' + d.sampleRate + ' bufferSize=' + d.BufferSize, '');
           sampleRate = d.sampleRate || 48000;
+          bufferSize = d.BufferSize || 512;
+          updateBsDisplay();
           document.getElementById('m-sr').textContent = (sampleRate / 1000).toFixed(1) + ' kHz';
-          initAudio(sampleRate);
+          initAudio(sampleRate, bufferSize);
           connectHttpStream(ch);
         })
         .catch(function(e) {
@@ -274,11 +282,13 @@
           addLog('WS string msg: ' + event.data, 'ls');
           var ack = JSON.parse(event.data);
           addLog('WS ack ok=' + ack.ok + ' sr=' + ack.sampleRate + ' bs=' + ack.bufferSize, 'ls');
-          if (ack.ok) {
+            if (ack.ok) {
             addLog('Subscribed: sr=' + ack.sampleRate + ' bs=' + ack.bufferSize, 'ls');
             sampleRate = ack.sampleRate || 48000;
+            bufferSize = ack.bufferSize || 512;
+            updateBsDisplay();
             document.getElementById('m-sr').textContent = (sampleRate / 1000).toFixed(1) + ' kHz';
-            initAudio(sampleRate);
+            initAudio(sampleRate, bufferSize);
           } else {
             addLog('Subscribe failed: ' + (ack.error || 'unknown'), 'lg');
             setStatus('Subscribe failed', 'error');
@@ -296,10 +306,12 @@
               text = new TextDecoder().decode(event.data);
               var ack = JSON.parse(text);
               addLog('WS ack(from binary) ok=' + ack.ok + ' sr=' + ack.sampleRate, 'ls');
-              if (ack.ok) {
+                if (ack.ok) {
                 sampleRate = ack.sampleRate || 48000;
+                bufferSize = ack.bufferSize || 512;
+                updateBsDisplay();
                 document.getElementById('m-sr').textContent = (sampleRate / 1000).toFixed(1) + ' kHz';
-                initAudio(sampleRate);
+                initAudio(sampleRate, bufferSize);
               }
               return;
             }
@@ -335,7 +347,7 @@
         addLog('WebSocket closed (code=' + e.code + ')', 'lw');
         if (running) {
           setStatus('Disconnected, retrying...', 'error');
-          setTimeout(function() { if (running) startWebSocket(); }, 1000);
+          setTimeout(function() { if (running) startWebSocket(); }, 200);
         }
       };
     }
@@ -356,8 +368,8 @@
     var nextScheduleTime = 0;
     var scheduleInterval = null;
 
-    function initAudio(sr) {
-      addLog('initAudio called sr=' + sr, 'ls');
+    function initAudio(sr, bs) {
+      addLog('initAudio called sr=' + sr + ' bs=' + bs, 'ls');
       audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: sr });
       if (audioCtx.state === 'suspended') {
         audioCtx.resume().then(function() {
@@ -369,36 +381,46 @@
       gainNode.connect(audioCtx.destination);
       addLog('AudioCtx sr=' + sr + ' gain=' + monitorGain + ' state=' + audioCtx.state, 'ls');
 
+      /* Adaptive scheduler parameters based on buffer period.
+       * bufferPeriod = time between server pushes.
+       * All thresholds scale so the scheduler stays in sync
+       * regardless of sample rate or buffer size. */
+       var bp = bs / sr * 1000;                    // buffer period in ms
+       var ringKeep = Math.ceil(sr * bp / 1000 * (selTransport() === 'ws' ? 5 : 1));  // safety margin: 5 buffer periods (WS) or 1 (HTTP)
+       var schedInterval = Math.max(10, Math.ceil(bp * (selTransport() === 'ws' ? 3 : 1)));  // tick every 3bp (WS) or 1bp (HTTP), min 10ms (browser floor)
+       var headStartMax = ringKeep / sr * 1000 + 50;  // ringKeep in ms + 50ms margin
+       var chunkMax = bs * Math.max(4, Math.ceil(sr * schedInterval / 1000 / bs * 1.5));  // drain 50% more than arrives per tick
+       var initDelay = bp * 5 / 1000;               // initial schedule offset: 5 buffer periods
+
       if (scheduleInterval) clearInterval(scheduleInterval);
-      nextScheduleTime = audioCtx.currentTime + 0.5;
+      nextScheduleTime = audioCtx.currentTime + initDelay;
+      addLog('Scheduler: bp=' + bp.toFixed(1) + 'ms ringKeep=' + ringKeep + ' (' + (ringKeep/sr*1000).toFixed(0) + 'ms) interval=' + schedInterval + 'ms chunkMax=' + chunkMax + ' headMax=' + headStartMax.toFixed(0) + 'ms', 'ls');
       addLog('Scheduler start nextScheduleTime=' + nextScheduleTime.toFixed(3) + ' now=' + audioCtx.currentTime.toFixed(3), 'ls');
 
       scheduleInterval = setInterval(function() {
-        if (!running || !audioCtx) return;
-        var now = audioCtx.currentTime;
-        if (nextScheduleTime < now) nextScheduleTime = now + 0.5;
-        var headStart = (nextScheduleTime - now) * 1000;
-        if (headStart > 800) return;    // enough head-start, preserve ring
-        var ringKeep = Math.floor(sampleRate * 0.15);  // keep 150ms safety buffer
-        if (ringCount < ringKeep + 512) return;         // need buffer + chunk
+       if (!running || !audioCtx) return;
+       var now = audioCtx.currentTime;
+       if (nextScheduleTime < now) nextScheduleTime = now + initDelay;
+       var headStart = (nextScheduleTime - now) * 1000;
+       if (headStart > headStartMax) return;
+       if (ringCount < ringKeep + bs) return;
 
-        // Schedule excess over the safety buffer (up to 2048 frames = 42ms)
-        var chunkFrames = Math.min(2048, ringCount - ringKeep);
-        var audioBuffer = audioCtx.createBuffer(1, chunkFrames, sampleRate);
-        var dst = audioBuffer.getChannelData(0);
-        for (var i = 0; i < chunkFrames; i++) {
-          dst[i] = audioRing[ringRead];
-          ringRead = (ringRead + 1) % audioRing.length;
-          ringCount--;
-        }
-        var src = audioCtx.createBufferSource();
-        src.buffer = audioBuffer;
-        src.connect(gainNode);
-        src.start(nextScheduleTime);
-        nextScheduleTime += audioBuffer.duration;
-        var ringMs = (ringCount / sampleRate * 1000);
-        addLog('SCHED now=' + now.toFixed(1) + ' head=' + headStart.toFixed(0) + 'ms ring=' + ringMs.toFixed(0) + 'ms sched=' + (audioBuffer.duration*1000).toFixed(0) + 'ms next=' + nextScheduleTime.toFixed(1), 'lw');
-      }, 30);
+       var chunkFrames = Math.min(chunkMax, ringCount - ringKeep);
+       var audioBuffer = audioCtx.createBuffer(1, chunkFrames, sampleRate);
+       var dst = audioBuffer.getChannelData(0);
+       for (var i = 0; i < chunkFrames; i++) {
+         dst[i] = audioRing[ringRead];
+         ringRead = (ringRead + 1) % audioRing.length;
+         ringCount--;
+       }
+       var src = audioCtx.createBufferSource();
+       src.buffer = audioBuffer;
+       src.connect(gainNode);
+       src.start(nextScheduleTime);
+       nextScheduleTime += audioBuffer.duration;
+       var ringMs = (ringCount / sampleRate * 1000);
+       addLog('SCHED now=' + now.toFixed(1) + ' head=' + headStart.toFixed(0) + 'ms ring=' + ringMs.toFixed(0) + 'ms sched=' + (audioBuffer.duration*1000).toFixed(0) + 'ms next=' + nextScheduleTime.toFixed(1), 'lw');
+     }, schedInterval);
 
       setInterval(function() { if (running) updateMetrics(); }, 500);
     }
@@ -506,6 +528,7 @@
       running = false;
       retryCount = 0;
       ringWrite = 0; ringRead = 0; ringCount = 0;
+      bufferSize = 512;
       audioRing.fill(0);
       byteAccum = new Uint8Array(0);
       if (scheduleInterval) { clearInterval(scheduleInterval); scheduleInterval = null; }
@@ -529,6 +552,13 @@
       });
     });
     document.querySelectorAll('input[name="monitor-ch"]').forEach(function(el) { el.closest('label').classList.toggle('active-ch', el.checked); });
+    document.querySelectorAll('input[name="transport"]').forEach(function(el) {
+      el.addEventListener('change', function() {
+        if (!running) return;
+        stopStream();
+        setTimeout(function() { startStream(); }, 200);
+      });
+    });
 
     (function() {
       var canvas = document.getElementById('waveform'), c = canvas.getContext('2d');

@@ -24,9 +24,9 @@ git clone https://github.com/LucasTippelt/pi-audio.git /var/www/pi-audio
 cd /var/www/pi-audio
 ```
 
-### 3. WebSocket server dependency (optional, legacy)
+### 3. Monitoring endpoints
 
-The WebSocket relay server is still available but the recommended monitoring path uses the engine's built-in HTTP stream server (port 8767).
+The DSP engine exposes multiple monitoring paths: the stable browser monitor uses the Node.js relay on port 8765 and receives engine data on port 8766, while the lower-latency stream uses the built-in HTTP server on port 8767. The engine also exposes a direct WebSocket endpoint on port 8768 for raw browser access.
 
 ```bash
 cd /var/www/pi-audio/pi-audio-web
@@ -133,9 +133,9 @@ cd /var/www/pi-audio/pi-audio-dsp
 sudo ./deploy.sh
 ```
 
-### 10. (Optional) Start the WebSocket server
+### 10. (Optional) Start the stability monitor relay
 
-The WebSocket relay server is optional. The engine's built-in HTTP stream server (port 8767) is the recommended monitoring path.
+The Node.js relay is the stability-focused monitoring option: it accepts the engine TCP stream on port 8766 and exposes a WebSocket browser endpoint on port 8765. The low-latency alternative is the engine's built-in HTTP stream on port 8767.
 
 ```bash
 sudo cp /var/www/pi-audio/pi-audio-ws-server.service /etc/systemd/system/
@@ -237,8 +237,8 @@ Set up Kilo Code on the Pi with a local LLM hosted on a workstation:
 │   ├── api.php                 # REST API
 │   ├── index.php               # Main UI
 │   ├── debug.php               # System debug page
-    │   ├── audio-debug.html        # Real-time audio monitor (WebSocket + HTTP stream from engine)
-│   ├── ws-audio-server-node.js # WebSocket relay server (Node.js, legacy/optional)
+    │   ├── audio-debug.html        # Real-time audio monitor (relay + direct WS + HTTP stream)
+│   ├── ws-audio-server-node.js # Stability monitor relay (Node.js, port 8765)
 │   ├── VERSION.json            # Auto-generated version info
 │   └── assets/                 # CSS, JS, static assets
 ├── pi-audio-ws-server.service  # WebSocket relay service (optional)
@@ -301,14 +301,14 @@ AudioEngine playback thread
     │ per-output DSP (volume/mute/stages)
     ├──► ALSA PCM (2-channel: tweeter + woofer)
     ├──► shm://pi-audio-monitor-{channel} (per-channel ring buffers)
-    ├──► TcpRelay → TCP 127.0.0.1:8766 → ws-audio-server-node.js (legacy)
-    ├──► HttpStreamServer → HTTP :8767 → browser (chunked stream)
-    └──► WebSocketServer  → WS  :8765 → browser (frame-based, no TCP batching)
+    ├──► TcpRelay → TCP 127.0.0.1:8766 → ws-audio-server-node.js (stability monitor relay)
+    ├──► HttpStreamServer → HTTP :8767 → browser (low-latency stream)
+    └──► WebSocketServer  → WS  :8768 → browser (direct engine endpoint)
 ```
 
-### WebSocket Monitoring (Frame-Based, Recommended)
+### WebSocket Monitoring (Direct Engine Endpoint)
 
-The engine embeds a minimal WebSocket server (port 8765) that delivers real-time audio with application-level framing. Each 512-frame buffer arrives as a distinct binary frame, bypassing browser TCP receive batching for stable `onmessage` callbacks every ~10.7ms.
+The engine embeds a minimal WebSocket server on port 8768 for direct browser access with application-level framing. Each 512-frame buffer arrives as a distinct binary frame, bypassing browser TCP receive batching for stable `onmessage` callbacks every ~10.7ms.
 
 - **Subscribe:** Client sends text frame `{"channel":"tweeter"}`
 - **Ack:** Server replies `{"ok":true,"sampleRate":48000,"bufferSize":512}`
@@ -317,9 +317,9 @@ The engine embeds a minimal WebSocket server (port 8765) that delivers real-time
 
 **Channels:** `pgm-l`, `pgm-r`, `tweeter`, `woofer`, `mic-1`..`mic-6`
 
-### HTTP Stream Monitoring
+### HTTP Stream Monitoring (Low-Latency Option)
 
-The engine embeds a minimal HTTP server (port 8767) that serves real-time audio streams directly to the browser:
+The engine embeds a minimal HTTP server on port 8767 that serves real-time audio streams directly to the browser. This is the low-latency monitoring path, while the Node.js relay on port 8765 provides the stability-oriented monitor.
 
 - **`GET /stream?ch=<channel>`** — Continuous raw float32LE mono audio stream with HTTP chunked transfer encoding
 - **`GET /status`** — JSON with sampleRate, BufferSize, volume, muted
@@ -329,9 +329,9 @@ The browser uses `fetch()` + `ReadableStream` to consume the stream, then schedu
 
 **Channels:** `pgm-l`, `pgm-r`, `tweeter`, `woofer`, `mic-1`..`mic-6`
 
-### TCP Relay (Legacy)
+### TCP Relay (Stability Monitor Path)
 
-The TCP relay (port 8766) + Node.js WebSocket server (port 8765) path still works but is deprecated in favor of the HTTP stream server.
+The TCP relay (port 8766) + Node.js WebSocket server (port 8765) path is the stability-oriented monitor path. It remains a first-class option alongside the lower-latency HTTP stream on port 8767.
 
 **Protocol** (TCP engine → Node.js): `[1 byte channel ID][4 bytes BE sample count][sampleCount × 4 bytes mono float32]`
 
@@ -414,8 +414,8 @@ sudo rm -f /dev/shm/pi-audio-test-* /dev/shm/pi-audio-test-mode
 curl http://localhost:8767/status
 curl http://localhost:8767/
 
-# WebSocket server (port 8765)
-wscat -c ws://localhost:8765
+# WebSocket server (port 8768)
+wscat -c ws://localhost:8768
 
 # Monitor ring buffers
 ls -la /dev/shm/pi-audio-monitor-*
@@ -427,7 +427,7 @@ aplay -l && arecord -l
 ### Debug Pages
 
 - **`/debug.php`** — Full system debug: versions, environment, permissions, binary status, per-channel monitor ring buffers (shared memory), engine state vs config, auto-refreshes every 5s
-- **`/audio-debug.html`** — Real-time audio monitor: WebSocket (port 8765, frame-based) or HTTP stream (port 8767), gapless AudioBufferSourceNode scheduling, waveform visualization, per-channel selection, auto sample rate detection with AudioContext recreation
+- **`/audio-debug.html`** — Real-time audio monitor: Node.js stability WebSocket on port 8765, direct engine WebSocket on port 8768, or low-latency HTTP stream on port 8767, with gapless AudioBufferSourceNode scheduling, waveform visualization, per-channel selection, and auto sample rate detection with AudioContext recreation
 
 ## Roadmap
 

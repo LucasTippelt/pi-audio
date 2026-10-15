@@ -32,7 +32,7 @@ fi
     head -1 "$REPO_DIR/VERSION"
     echo "$UIO"
 } > "$REPO_DIR/VERSION.tmp"
-mv "$REPO_DIR/VERSION.tmp" "$REPO_DIR/VERSION"
+mv -f "$REPO_DIR/VERSION.tmp" "$REPO_DIR/VERSION"
 
 GIT_HASH=$(cd "$REPO_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 GIT_BRANCH=$(cd "$REPO_DIR" && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")

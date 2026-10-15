@@ -4,12 +4,14 @@
 #include "core/monitor_writer.h"
 #include "core/ring_buffer_io.h"
 #include "core/shm_ring.h"
+#include "core/test_inject.h"
 #include <alsa/asoundlib.h>
 #include <cstdio>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sched.h>
 #include <iostream>
+#include <utility>
 
 AudioEngine::AudioEngine() {}
 
@@ -111,10 +113,32 @@ bool AudioEngine::initialize(const EngineConfig& config) {
         }
     }
 
+    /* Pre-create test injection shared memory buffers so the playback
+     * thread doesn't log ENOENT on every buffer cycle after reboot. */
+    for (const char* testName : {"pi-audio-test-tweeter", "pi-audio-test-woofer"}) {
+        mode_t oldUmask = umask(0);
+        int fd = shm_open(testName, O_CREAT | O_RDWR, 0666);
+        umask(oldUmask);
+        if (fd >= 0) {
+            ftruncate(fd, kTestInjectHeaderSize + kTestInjectDataSize);
+            void* ptr = mmap(nullptr, kTestInjectHeaderSize + kTestInjectDataSize,
+                             PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+            if (ptr != MAP_FAILED) {
+                auto* hdr = static_cast<TestInjectHeader*>(ptr);
+                std::memset(hdr, 0, kTestInjectHeaderSize);
+                std::memcpy(hdr->magic, "PIIJ", 4);
+                munmap(ptr, kTestInjectHeaderSize + kTestInjectDataSize);
+            }
+            fchmod(fd, 0666);
+            close(fd);
+        }
+    }
+
     tcpRelay().disconnect();
     tcpRelay().connect("127.0.0.1", 8766);
 
     m_httpServer.stop();
+    m_httpServer.setBufferSize(config.bufferSize);
     m_httpServer.setStatusCallback([this]() -> std::string {
         auto cfg = getCurrentConfig();
         return "{\"sampleRate\":" + std::to_string(cfg.sampleRate) +
@@ -129,8 +153,12 @@ bool AudioEngine::initialize(const EngineConfig& config) {
     m_wsServer.stop();
     m_wsServer.setSampleRate(config.sampleRate);
     m_wsServer.setBufferSize(config.bufferSize);
-    if (!m_wsServer.start("0.0.0.0", 8765)) {
-        Logger::getInstance().warning("WebSocket server failed to start on :8765");
+    m_wsServer.setConfigCallback([this]() -> std::pair<int, int> {
+        auto cfg = getCurrentConfig();
+        return {cfg.sampleRate, cfg.bufferSize};
+    });
+    if (!m_wsServer.start("0.0.0.0", 8768)) {
+        Logger::getInstance().warning("WebSocket server failed to start on :8768");
     }
 
     Logger::getInstance().info("Engine initialized: " +

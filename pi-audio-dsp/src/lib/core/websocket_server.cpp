@@ -198,15 +198,24 @@ void WebSocketServer::pushAudio(uint8_t channelId, const float* data, size_t fra
     double nowMs = std::chrono::duration<double, std::milli>(tNow.time_since_epoch()).count();
 
     /* Build frame header inline: FIN+binary(0x82) + length */
-    uint8_t hdr[3];
+    uint8_t hdr[4];
     hdr[0] = 0x82;
     if (dataLen <= 125) {
         hdr[1] = static_cast<uint8_t>(dataLen);
     } else {
         hdr[1] = 126;
         hdr[2] = static_cast<uint8_t>((dataLen >> 8) & 0xFF);
+        hdr[3] = static_cast<uint8_t>(dataLen & 0xFF);
     }
-    size_t hdrLen = (dataLen <= 125) ? 2 : 3;
+    size_t hdrLen = (dataLen <= 125) ? 2 : 4;
+    size_t totalLen = hdrLen + dataLen;
+
+    /* Reusable static buffer: avoids per-call allocation in audio thread. */
+    static std::vector<uint8_t> frame;
+    if (frame.size() < totalLen) frame.resize(totalLen);
+
+    std::memcpy(frame.data(), hdr, hdrLen);
+    std::memcpy(frame.data() + hdrLen, data, dataLen);
 
     std::lock_guard<std::mutex> lock(m_clientsMutex);
     auto tLock = std::chrono::steady_clock::now();
@@ -217,25 +226,15 @@ void WebSocketServer::pushAudio(uint8_t channelId, const float* data, size_t fra
     for (auto* c : m_clients) {
         if (!c->subscribed || c->channel != channelId || c->sock < 0) continue;
 
-        /* Send header + payload as two sends. With small SO_SNDBUF and
-           TCP_NODELAY, each pair should flush as one TCP packet. */
-        ssize_t n = ::send(c->sock, reinterpret_cast<const char*>(hdr), hdrLen, MSG_NOSIGNAL | MSG_DONTWAIT);
-        if (n > 0 && n == static_cast<ssize_t>(hdrLen)) {
-            n = ::send(c->sock,
-                reinterpret_cast<const char*>(data),
-                dataLen,
-                MSG_NOSIGNAL | MSG_DONTWAIT);
-            if (n > 0 && n == static_cast<ssize_t>(dataLen)) {
-                c->framesSent++;
-                c->bytesSent += dataLen;
-                c->lastPushMs = nowMs;
-                delivered++;
-            } else if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-                c->framesDropped++;
-                dropped++;
-            } else {
-                dead.push_back(c);
-            }
+        ssize_t n = ::send(c->sock,
+            reinterpret_cast<const char*>(frame.data()),
+            totalLen,
+            MSG_NOSIGNAL | MSG_DONTWAIT);
+        if (n > 0 && n == static_cast<ssize_t>(totalLen)) {
+            c->framesSent++;
+            c->bytesSent += dataLen;
+            c->lastPushMs = nowMs;
+            delivered++;
         } else if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
             c->framesDropped++;
             dropped++;
@@ -288,10 +287,7 @@ void WebSocketServer::acceptLoop() {
 
         int tcpOpt = 1;
         setsockopt(clientSock, IPPROTO_TCP, TCP_NODELAY, &tcpOpt, sizeof(tcpOpt));
-        /* Small send buffer: one frame (2052B) + margin. Forces each frame
-           to flush as its own TCP packet instead of accumulating in the
-           kernel buffer and arriving at the browser in bursts. */
-        int bufSize = 4096;
+        int bufSize = (int)(m_bufferSize * 4 * 64);
         setsockopt(clientSock, SOL_SOCKET, SO_SNDBUF, &bufSize, sizeof(bufSize));
 
         Client* c = new Client();
@@ -565,8 +561,10 @@ void WebSocketServer::clientLoop(int sock) {
                 client->subscribed = true;
             }
 
-            std::string ack = "{\"ok\":true,\"sampleRate\":" + std::to_string(m_sampleRate) +
-                ",\"bufferSize\":" + std::to_string(m_bufferSize) + "}";
+            int sr = m_sampleRate, bs = m_bufferSize;
+            if (m_configCb) { auto p = m_configCb(); sr = p.first; bs = p.second; }
+            std::string ack = "{\"ok\":true,\"sampleRate\":" + std::to_string(sr) +
+                ",\"bufferSize\":" + std::to_string(bs) + "}";
             sendText(sock, ack);
             Logger::getInstance().info("WebSocketServer: subscribed to " + channelName +
                 " (ch=" + std::to_string(channelId) + ")");

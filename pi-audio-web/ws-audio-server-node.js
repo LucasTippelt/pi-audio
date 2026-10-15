@@ -7,9 +7,24 @@ const path = require('path');
 
 const WS_PORT = 8765;
 const TCP_PORT = 8766;
-const SAMPLE_RATE = 48000;
 const PING_INTERVAL = 20000;
 const PING_TIMEOUT = 5000;
+
+async function getEngineSettings() {
+  const response = await fetch('http://127.0.0.1:8767/status', {
+    signal: AbortSignal.timeout(2000),
+  });
+  if (!response.ok) throw new Error('Engine status returned HTTP ' + response.status);
+
+  const status = await response.json();
+  const sampleRate = Number(status.sampleRate);
+  const bufferSize = Number(status.BufferSize);
+  if (!Number.isInteger(sampleRate) || sampleRate <= 0 ||
+      !Number.isInteger(bufferSize) || bufferSize <= 0) {
+    throw new Error('Engine status has invalid sample rate or buffer size');
+  }
+  return {sampleRate, bufferSize};
+}
 
 /* Load version info */
 let versionInfo = { version: 'unknown' };
@@ -68,7 +83,7 @@ for (const idx of Object.values(CHANNELS)) {
 /* Track which channels have active clients */
 const activeChannels = new Set();
 
-wss.on('connection', (ws, req) => {
+wss.on('connection', async (ws, req) => {
   const url = new URL(req.url, 'http://localhost');
   const ch = url.searchParams.get('ch') || 'pgm-l';
   const chIdx = CHANNELS[ch] != null ? CHANNELS[ch] : 0;
@@ -78,9 +93,22 @@ wss.on('connection', (ws, req) => {
   let pongDeadline = Date.now() + PING_TIMEOUT;
 
   console.log('ws-connect ' + peer + ' ch=' + ch + ' idx=' + chIdx);
+  let settings;
+  try {
+    settings = await getEngineSettings();
+  } catch (error) {
+    console.log('[CONFIG] engine status unavailable: ' + error.message);
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ok: false, error: 'Engine status unavailable'}));
+      ws.close(1011, 'Engine status unavailable');
+    }
+    return;
+  }
+  if (ws.readyState !== WebSocket.OPEN) return;
+
   clients[chIdx].push(ws);
   activeChannels.add(chIdx);
-  ws.send(JSON.stringify({ok: true, sampleRate: SAMPLE_RATE, bufferSize: 512}));
+  ws.send(JSON.stringify({ok: true, ...settings}));
   // Tell engine to enable this channel
   if (engineSocket && engineSocket.writable) {
     try {
@@ -159,6 +187,10 @@ const tcpServer = net.createServer((socket) => {
   const peer = socket.remoteAddress + ':' + socket.remotePort;
   console.log('tcp-connect ' + peer);
   engineSocket = socket;
+  for (const chIdx of activeChannels) {
+    socket.write('E ' + chIdx + '\n');
+    console.log('[CTRL] restored channel ' + chIdx + ' after engine reconnect');
+  }
   socket.on('error', (e) => { console.log('tcp-error ' + peer + ': ' + e.message); });
 
   let buf = Buffer.allocUnsafe(65536);

@@ -1,8 +1,8 @@
 {
-  "version": "v3.0.0.86",
-  "base": "3.0.0",
-  "commit": "1e98634",
+  "version": "v2.1.0.125",
+  "base": "2.1.0",
+  "commit": "2422a39",
   "branch": "staging2",
-  "buildTime": "2026-10-14T23:26:03Z",
+  "buildTime": "2026-10-15T10:58:11Z",
   "dirty": true
 }

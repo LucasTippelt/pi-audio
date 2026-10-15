@@ -76,6 +76,7 @@ sudo systemctl daemon-reload
 sudo cp "$REPO_DIR/pi-audio-ws-server.service" /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable pi-audio-ws-server
+sudo systemctl enable pi-audio-engine
 
 # Call redeploy.sh to install binaries and restart all services
 echo ""

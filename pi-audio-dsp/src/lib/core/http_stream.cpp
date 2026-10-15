@@ -90,7 +90,17 @@ void HttpStreamServer::pushSamples(uint8_t channelId, const float* data, size_t 
 
     char hexLen[32];
     int hexLenSize = std::snprintf(hexLen, sizeof(hexLen), "%zx\r\n", dataLen);
-    const char* crlf = "\r\n";
+    const char crlf[] = "\r\n";
+    size_t totalLen = (size_t)hexLenSize + dataLen + 2;
+
+    /* Reusable static buffer: grows to max seen size, shrinks on stop().
+     * Avoids per-call allocation in the real-time audio thread. */
+    static std::vector<uint8_t> chunk;
+    if (chunk.size() < totalLen) chunk.resize(totalLen);
+
+    std::memcpy(chunk.data(), hexLen, (size_t)hexLenSize);
+    std::memcpy(chunk.data() + (size_t)hexLenSize, data, dataLen);
+    std::memcpy(chunk.data() + (size_t)hexLenSize + dataLen, crlf, 2);
 
     auto tNow = std::chrono::steady_clock::now();
     double nowMs = std::chrono::duration<double, std::milli>(tNow.time_since_epoch()).count();
@@ -103,41 +113,19 @@ void HttpStreamServer::pushSamples(uint8_t channelId, const float* data, size_t 
     for (auto* c : m_clients) {
         if (!c->streaming || c->channel != channelId || c->sock < 0) continue;
 
+        ssize_t n = ::send(c->sock,
+            reinterpret_cast<const char*>(chunk.data()),
+            totalLen,
+            MSG_NOSIGNAL | MSG_DONTWAIT);
         bool ok = true;
-        if (hexLenSize > 0) {
-            ssize_t n = ::send(c->sock, hexLen, hexLenSize, MSG_NOSIGNAL | MSG_DONTWAIT);
-            if (n <= 0) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                    ok = false; eagainHits++;
-                } else {
-                    dead.push_back(c);
-                }
-            }
-        }
-        if (ok) {
-            ssize_t n = ::send(c->sock,
-                reinterpret_cast<const char*>(data),
-                dataLen,
-                MSG_NOSIGNAL | MSG_DONTWAIT);
-            if (n <= 0) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                    ok = false; eagainHits++;
-                } else {
-                    dead.push_back(c);
-                }
-            } else if (n < static_cast<ssize_t>(dataLen)) {
+        if (n <= 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 ok = false; eagainHits++;
+            } else {
+                dead.push_back(c);
             }
-        }
-        if (ok) {
-            ssize_t n = ::send(c->sock, crlf, 2, MSG_NOSIGNAL | MSG_DONTWAIT);
-            if (n <= 0) {
-                if (!(errno == EAGAIN || errno == EWOULDBLOCK)) {
-                    dead.push_back(c);
-                } else {
-                    eagainHits++;
-                }
-            }
+        } else if (n < static_cast<ssize_t>(totalLen)) {
+            ok = false; eagainHits++;
         }
 
         if (ok) {
@@ -204,7 +192,7 @@ void HttpStreamServer::acceptLoop() {
 
         int opt = 1;
         setsockopt(clientSock, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt));
-        int bufSize = 256 * 1024;
+        int bufSize = (int)(m_bufferSize * 4 * 16);
         setsockopt(clientSock, SOL_SOCKET, SO_SNDBUF, &bufSize, sizeof(bufSize));
 
         Client* c = new Client();

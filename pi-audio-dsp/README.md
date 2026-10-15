@@ -58,9 +58,9 @@ pi-audio-dsp/
 │   │   │   ├── config.cpp        # ConfigManager (JSON loading)
 │   │   │   ├── logger.cpp        # Logger with rotation (1MB, 3 backups)
 │   │   │   ├── monitor.cpp       # Per-channel monitor ring buffer writer
-    │   │   │   ├── tcp_relay.cpp     # TCP relay client (pushes to WS server, legacy)
-    │   │   │   ├── http_stream.cpp   # Embedded HTTP stream server (port 8767)
-    │   │   │   └── websocket_server.cpp # Embedded WebSocket server (port 8765, frame-based)
+    │   │   │   ├── tcp_relay.cpp     # TCP relay client (pushes to the stability-monitor relay on 8766)
+    │   │   │   ├── http_stream.cpp   # Embedded HTTP stream server (port 8767, low-latency path)
+    │   │   │   └── websocket_server.cpp # Embedded WebSocket server (port 8768, direct engine path)
 │   │   └── adapters/     # Web interface adapters
 │   │       ├── apply.cpp         # Validates config, writes reload trigger, polls confirmation
 │   │       ├── status.cpp        # Reads engine state file
@@ -183,7 +183,7 @@ POSIX shared memory objects (`shm_open` + `mmap`), visible at `/dev/shm/`:
 | `pi-audio-test-woofer` | Mono float32, 4MB, `PIIJ` header | Test adapter | Playback thread |
 | `pi-audio-test-mode` | Text ("tweeter", "woofer", "pgm-l") | Test adapter | Playback thread |
 
-On startup, the engine creates all shared memory objects and syncs read positions. External writers (test adapter, external sources) access the same objects via `shm_open()`.
+On startup, the engine creates all shared memory objects, initializes test injection buffers with `PIIJ` headers, and syncs read positions. External writers (test adapter, external sources) access the same objects via `shm_open()`.
 
 ### Monitor Ring Buffers
 
@@ -197,20 +197,22 @@ Embedded HTTP server on port 8767. Serves real-time audio streams directly to br
 - **`GET /status`** — JSON: sampleRate, BufferSize, volume, muted
 - **`GET /`** — Channel list (JSON array)
 
-The playback thread pushes samples directly to connected HTTP clients. No intermediate relay process. Uses `TCP_NODELAY` and 128KB send buffer for low-latency delivery.
+The playback thread pushes samples directly to connected HTTP clients. No intermediate relay process. Uses `TCP_NODELAY` and adaptive send buffer (`bufferSize × 4 × 16` bytes). Each chunked frame is sent atomically (hex length + data + CRLF in a single `send()`) to prevent partial-chunk corruption on `EAGAIN`.
 
 ### WebSocket Server (Frame-Based Monitoring)
 
-Embedded WebSocket server on port 8765. Provides application-level framing: each 512-frame buffer arrives as a distinct binary frame, bypassing browser TCP receive batching for stable `onmessage` callbacks every ~10.7ms.
+Embedded WebSocket server on port 8768. Provides application-level framing: each buffer arrives as a distinct binary frame, bypassing browser TCP receive batching for stable `onmessage` callbacks.
+
+The Node.js relay on port 8765 remains the stability-oriented monitoring path, while the built-in HTTP stream on port 8767 is the low-latency option. The direct engine WebSocket on 8768 is the raw browser endpoint.
 
 - **Subscribe:** Client sends text frame `{"channel":"tweeter"}`
-- **Ack:** Server replies `{"ok":true,"sampleRate":48000,"bufferSize":512}`
-- **Audio:** Server pushes binary frames — raw mono float32LE, 512 frames per frame (2048 bytes)
+- **Ack:** Server replies `{"ok":true,"sampleRate":48000,"bufferSize":512}` — reads live config via callback, so sampleRate/bufferSize stay current after runtime changes
+- **Audio:** Server pushes binary frames — raw mono float32LE, `bufferSize` frames per frame
 - **Unsubscribe:** Client closes connection
 
-Uses Hybi-13 (RFC 6455) handshake with SHA-1. Server→client frames are unmasked binary. Client→server frames are masked text. Non-blocking `send()` with `MSG_DONTWAIT` from playback thread; EAGAIN drops absorbed by client-side buffer.
+Uses Hybi-13 (RFC 6455) handshake with SHA-1. Server→client frames are unmasked binary. Client→server frames are masked text. Non-blocking atomic `send()` (header + payload in a single call) with `MSG_DONTWAIT` from playback thread; adaptive SO_SNDBUF (`bufferSize × 4 × 64` bytes). EAGAIN drops absorbed by client-side buffer.
 
-### TCP Relay (Legacy)
+### TCP Relay (Stability Monitor Path)
 
 Pushes per-channel mono float32 via TCP to `ws-audio-server-node.js` (port 8766). Non-blocking push from playback thread, dedicated sendLoop thread with condition variable. Sends each chunk immediately (no accumulation). Auto-reconnects on drop.
 
@@ -287,8 +289,8 @@ sudo rm -f /dev/shm/pi-audio-test-* /dev/shm/pi-audio-test-mode
 # HTTP stream server
 curl http://localhost:8767/status
 
-# WebSocket server (port 8765)
-wscat -c ws://localhost:8765
+# WebSocket server (port 8768)
+wscat -c ws://localhost:8768
 
 # ALSA
 aplay -l && arecord -l

@@ -3,16 +3,18 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <utility>
 #include <string>
 #include <vector>
 #include <atomic>
 #include <mutex>
 #include <thread>
+#include <functional>
 
 /*
  * Minimal WebSocket server for real-time audio streaming.
  *
- * Embeds in the C++ engine on port 8765. Provides application-level framing
+ * Embeds in the C++ engine on port 8768. Provides application-level framing
  * so each 512-frame buffer arrives as a distinct binary frame, bypassing
  * browser TCP receive batching.
  *
@@ -35,6 +37,10 @@ public:
 
     void setSampleRate(int sr) { m_sampleRate = sr; }
     void setBufferSize(int bs) { m_bufferSize = bs; }
+
+    /* Set a callback that returns the current {sampleRate, bufferSize}.
+     * Takes priority over setSampleRate/setBufferSize when set. */
+    void setConfigCallback(std::function<std::pair<int, int>()> cb) { m_configCb = cb; }
 
     bool isRunning() const { return m_running.load(); }
 
@@ -72,6 +78,7 @@ private:
 
     int m_sampleRate = 48000;
     int m_bufferSize = 512;
+    std::function<std::pair<int, int>()> m_configCb;
 };
 
 #endif

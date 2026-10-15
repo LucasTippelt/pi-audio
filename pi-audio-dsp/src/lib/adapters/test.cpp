@@ -152,9 +152,11 @@ int testAdapter(const std::string& driver) {
         std::string shmName = (driver == "Tweeter") ? "pi-audio-test-tweeter" : "pi-audio-test-woofer";
         std::vector<float> buffer(totalFrames);
         for (size_t i = 0; i < totalFrames; ++i) buffer[i] = dist(rng);
-        int err = writeTestInject(shmName, buffer.data(), totalFrames);
+        std::string writeError;
+        int err = writeTestInject(shmName, buffer.data(), totalFrames, &writeError);
         if (err) {
-            std::cout << "{\"ok\":false,\"driver\":\"" << driver << "\",\"error\":\"write failed\"}";
+            std::cout << "{\"ok\":false,\"driver\":\"" << driver
+                      << "\",\"error\":\"write failed: " << writeError << "\"}";
             return err;
         }
         /* Signal engine: enter test mode */

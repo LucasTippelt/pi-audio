@@ -185,8 +185,6 @@ void TcpRelay::sendLoop() {
                     auto& chBuf = m_buffers[channelId];
                     chBuf.insert(chBuf.begin(), samples.data() + sentSamples, samples.data() + frames);
                 }
-                close(m_sock);
-                m_sock = -1;
                 reconnect();
                 break;
             }
@@ -214,14 +212,23 @@ bool TcpRelay::isConnected() const {
 
 void TcpRelay::ctrlLoop() {
     while (m_running.load()) {
-        if (m_sock < 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            continue;
-        }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        std::lock_guard<std::mutex> socketLock(m_ctrlMutex);
+        if (m_sock < 0) continue;
         char tmp[64];
         ssize_t n = ::recv(m_sock, tmp, sizeof(tmp), MSG_DONTWAIT | MSG_PEEK);
-        if (n <= 0) continue;
+        if (n == 0) {
+            m_connected = false;
+            m_ctrlBufLen = 0;
+            continue;
+        }
+        if (n < 0) {
+            if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+                m_connected = false;
+                m_ctrlBufLen = 0;
+            }
+            continue;
+        }
         for (ssize_t i = 0; i < n; i++) {
             if (tmp[i] == '\n' && m_ctrlBufLen < static_cast<int>(sizeof(m_ctrlBuf) - 1)) {
                 m_ctrlBuf[m_ctrlBufLen++] = tmp[i];
@@ -258,8 +265,17 @@ void TcpRelay::ctrlLoop() {
 void TcpRelay::reconnect() {
     if (m_host.empty() || m_port == 0) return;
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    std::lock_guard<std::mutex> socketLock(m_ctrlMutex);
+    if (m_sock >= 0) {
+        close(m_sock);
+        m_sock = -1;
+    }
+    m_connected = false;
     m_ctrlBufLen = 0;
-    for (int i = 0; i < MAX_CHANNELS; i++) m_channelEnabled[i] = false;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (int i = 0; i < MAX_CHANNELS; i++) m_channelEnabled[i] = false;
+    }
 
     m_sock = socket(AF_INET, SOCK_STREAM, 0);
     if (m_sock < 0) return;

@@ -71,17 +71,36 @@ inline size_t readTestInject(const std::string& shmName, float* out, size_t maxF
 }
 
 /* Writes mono float32 frames to a test injection shared memory buffer. */
-inline int writeTestInject(const std::string& shmName, const float* data, size_t frames) {
-    shm_unlink(shmName.c_str());
+inline int writeTestInject(const std::string& shmName, const float* data, size_t frames,
+                           std::string* error = nullptr) {
+    auto fail = [error](const char* operation) {
+        int savedErrno = errno ? errno : EIO;
+        if (error) *error = std::string(operation) + ": " + strerror(savedErrno);
+        errno = savedErrno;
+        return savedErrno;
+    };
+    if (frames > kTestInjectDataSize / sizeof(float)) {
+        if (error) *error = "frame count exceeds shared-memory capacity";
+        return EFBIG;
+    }
+
     mode_t oldUmask = umask(0);
-    int fd = shm_open(shmName.c_str(), O_CREAT | O_RDWR, 0666);
+    int fd = shm_open(shmName.c_str(), O_RDWR, 0666);
     umask(oldUmask);
-    if (fd < 0) return 1;
-    ftruncate(fd, kTestInjectHeaderSize + kTestInjectDataSize);
+    if (fd < 0) return fail("shm_open");
+    if (ftruncate(fd, kTestInjectHeaderSize + kTestInjectDataSize) < 0) {
+        int result = fail("ftruncate");
+        close(fd);
+        return result;
+    }
 
     void* ptr = mmap(nullptr, kTestInjectHeaderSize + kTestInjectDataSize,
                      PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    if (ptr == MAP_FAILED) { close(fd); return 1; }
+    if (ptr == MAP_FAILED) {
+        int result = fail("mmap");
+        close(fd);
+        return result;
+    }
 
     TestInjectHeader* hdr = static_cast<TestInjectHeader*>(ptr);
     std::memcpy(hdr->magic, "PIIJ", 4);
@@ -91,7 +110,12 @@ inline int writeTestInject(const std::string& shmName, const float* data, size_t
     float* dest = reinterpret_cast<float*>(static_cast<uint8_t*>(ptr) + kTestInjectHeaderSize);
     std::memcpy(dest, data, frames * sizeof(float));
 
-    msync(ptr, kTestInjectHeaderSize + kTestInjectDataSize, MS_SYNC);
+    if (msync(ptr, kTestInjectHeaderSize + kTestInjectDataSize, MS_SYNC) < 0) {
+        int result = fail("msync");
+        munmap(ptr, kTestInjectHeaderSize + kTestInjectDataSize);
+        close(fd);
+        return result;
+    }
     munmap(ptr, kTestInjectHeaderSize + kTestInjectDataSize);
     close(fd);
     return 0;

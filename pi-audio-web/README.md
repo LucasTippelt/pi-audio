@@ -9,8 +9,8 @@ PHP/Apache control surface for the Pi Audio DSP engine. Single-speaker system wi
 | `api.php` | REST API — state management, presets, DSP commands |
 | `index.php` | Main UI (HTML + JS) |
 | `debug.php` | Debug page — env vars, permissions, binary status, per-channel monitor ring buffers (shared memory), engine state vs config |
-| `audio-debug.html` | Real-time audio monitor — HTTP stream from engine (port 8767), gapless scheduling |
-| `ws-audio-server-node.js` | WebSocket relay server (Node.js, port 8765, legacy/optional) |
+| `audio-debug.html` | Real-time audio monitor — stability relay on port 8765, direct engine WebSocket on port 8768, or low-latency HTTP stream on port 8767 |
+| `ws-audio-server-node.js` | Stability-oriented WebSocket relay server (Node.js, port 8765, receives engine data on 8766) |
 | `VERSION.json` | Auto-generated version info |
 | `assets/` | CSS, JavaScript, static assets |
 
@@ -143,9 +143,9 @@ The engine's built-in HTTP stream server (port 8767) serves real-time audio dire
 
 Channels: `pgm-l`, `pgm-r`, `tweeter`, `woofer`, `mic-1`..`mic-6`.
 
-## WebSocket Monitoring (Legacy)
+## WebSocket Monitoring
 
-The TCP relay (port 8766) + Node.js WebSocket server (port 8765) path still works but is deprecated.
+The Node.js relay on port 8765 is the stability-oriented monitor path, while the built-in HTTP stream on port 8767 is the low-latency option. The engine also exposes a direct WebSocket endpoint on port 8768 for raw browser access.
 
 ## Environment Variables
 
@@ -216,12 +216,16 @@ Access at `http://<ip>/debug.php` (auto-refreshes every 5 seconds):
 
 Access at `http://<ip>/audio-debug.html`:
 
-- HTTP stream from engine (port 8767) via `fetch()` + `ReadableStream`
-- Gapless audio playback using `AudioBufferSourceNode` scheduling with overlap
+- Dual transport: Node.js relay WebSocket on port 8765 ("Stability") or low-latency HTTP stream on port 8767 ("Lower Latency"), with the direct engine WebSocket on port 8768 as an additional raw path
+- WebSocket: binary frames via `onmessage`, lower jitter
+- HTTP: chunked transfer via `fetch()` + `ReadableStream`
+- Adaptive gapless audio playback using `AudioBufferSourceNode` scheduling — scheduler interval, ring buffer safety margin, chunk size, and headroom threshold all scale with server sampleRate and bufferSize
+- Transport switch during playback restarts stream with new transport
+- Auto-reconnect on server drop (200ms delay for WebSocket, immediate for HTTP)
 - Canvas waveform visualization
 - Per-channel selection (PGM L/R, tweeter, woofer, mic-1..mic-6)
-- Auto sample rate detection with AudioContext recreation on change
-- Metrics: sample rate, queue level, RMS level, buffers queued, drop count, events
+- Auto sample rate and buffer size detection from server ack/status
+- Metrics: sample rate, buffer size, queue level, RMS level, buffers queued, drop count, stream gap
 
 ### Test Buttons
 

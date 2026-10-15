@@ -30,6 +30,7 @@ sudo chmod 775 /run/pi-audio
 
 # Restart all services
 echo "Restarting services..."
+sudo systemctl enable --now pi-audio-ws-server
 sudo systemctl restart pi-audio-engine
 sudo systemctl restart apache2
 sleep 1

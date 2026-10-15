@@ -43,6 +43,8 @@ public:
     /* Whether the server is currently running. */
     bool isRunning() const { return m_running.load(); }
 
+    void setBufferSize(int bs) { m_bufferSize = bs; }
+
 private:
     void acceptLoop();
     void clientLoop(int sock);
@@ -70,6 +72,8 @@ private:
     std::vector<Client*> m_clients;
 
     std::function<std::string()> m_statusCb;
+
+    int m_bufferSize = 512;
 };
 
 #endif
