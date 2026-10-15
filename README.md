@@ -294,6 +294,7 @@ Monitoring channels always show actual DSP output:
 - Woofer monitoring: woofer output after DSP
 - PGM_L monitoring: raw PGM_L input
 
+```
 Test adapter (pi-audio-test)
     │ writes whitenoise to shared memory, signals engine via control file
     ▼
