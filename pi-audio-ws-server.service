@@ -1,6 +1,7 @@
 [Unit]
 Description=Pi Audio WebSocket Server
 After=network.target
+Before=pi-audio-engine.service
 
 [Service]
 Type=simple

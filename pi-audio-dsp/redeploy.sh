@@ -21,16 +21,18 @@ sudo chmod 755 /usr/local/bin/pi-audio-*
 # Install systemd service
 sudo cp "$DSP_DIR/pi-audio-engine.service" /etc/systemd/system/
 sudo systemctl daemon-reload
-
-# Fix permissions for runtime directories
-sudo chown root:audio /run/pi-audio
+sudo mkdir -p /etc/pi-audio/config
+sudo mkdir -p /etc/pi-audio/presets
+sudo mkdir -p /var/log/pi-audio
+sudo mkdir -p /run/pi-audio
+sudo chown pi:audio /run/pi-audio
 sudo chmod 775 /run/pi-audio
 
 # Restart all services
 echo "Restarting services..."
+sudo systemctl enable --now pi-audio-ws-server
 sudo systemctl restart pi-audio-engine
 sudo systemctl restart apache2
-sudo systemctl restart pi-audio-ws-server
 sleep 1
 
 echo ""
@@ -46,4 +48,3 @@ echo ""
 echo "Service status:"
 echo "  Engine:       $(sudo systemctl is-active pi-audio-engine)"
 echo "  Apache:       $(sudo systemctl is-active apache2)"
-echo "  WS Server:    $(sudo systemctl is-active pi-audio-ws-server)"

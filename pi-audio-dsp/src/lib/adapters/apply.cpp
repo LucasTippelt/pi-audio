@@ -12,7 +12,6 @@
 int applyAdapter(const std::string& configFile) {
     Logger::getInstance().info("Apply adapter invoked");
 
-    // Read configuration from file
     auto configManager = ConfigManager::instance();
     if (!configManager->loadFromFile(configFile)) {
         std::cerr << "Failed to load configuration from " << configFile << std::endl;
@@ -21,7 +20,6 @@ int applyAdapter(const std::string& configFile) {
 
     auto config = configManager->getConfig();
 
-    // Validate sample rate
     if (config.sampleRate != 44100 && config.sampleRate != 48000 &&
         config.sampleRate != 88200 && config.sampleRate != 96000 &&
         config.sampleRate != 176400 && config.sampleRate != 192000) {
@@ -29,7 +27,6 @@ int applyAdapter(const std::string& configFile) {
         return 1;
     }
 
-    // Validate buffer size
     if (config.bufferSize != 64 && config.bufferSize != 128 &&
         config.bufferSize != 256 && config.bufferSize != 512 &&
         config.bufferSize != 1024 && config.bufferSize != 2048 &&
@@ -38,7 +35,6 @@ int applyAdapter(const std::string& configFile) {
         return 1;
     }
 
-    // Signal engine to reload config by writing trigger file
     FILE* f = fopen("/run/pi-audio/reload", "w");
     if (f) {
         fprintf(f, "%s", configFile.c_str());
@@ -48,37 +44,31 @@ int applyAdapter(const std::string& configFile) {
         Logger::getInstance().warning("Failed to write reload trigger");
     }
 
-    // Wait for engine to confirm by checking engine-state.json
-    // Engine writes this file every second in its main loop
     const int maxWaitMs = 5000;
     const int pollMs = 100;
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(maxWaitMs);
 
     while (std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(pollMs));
-
         std::ifstream stateFile("/run/pi-audio/engine-state.json");
         if (!stateFile.is_open()) continue;
 
         std::string stateContent((std::istreambuf_iterator<char>(stateFile)),
-                                  std::istreambuf_iterator<char>());
+                                   std::istreambuf_iterator<char>());
         stateFile.close();
 
-        // Parse JSON manually to avoid dependency - look for sampleRate and BufferSize
         size_t srPos = stateContent.find("\"sampleRate\":");
         size_t bsPos = stateContent.find("\"BufferSize\":");
         if (srPos == std::string::npos || bsPos == std::string::npos) continue;
 
-        // Extract sample rate value
-        srPos += 13; // skip "\"sampleRate\":"
+        srPos += 13;
         while (srPos < stateContent.length() && (stateContent[srPos] == ' ' || stateContent[srPos] == '\t')) srPos++;
         std::string srStr;
         while (srPos < stateContent.length() && stateContent[srPos] >= '0' && stateContent[srPos] <= '9') {
             srStr += stateContent[srPos++];
         }
 
-        // Extract buffer size value
-        bsPos += 13; // skip "\"BufferSize\":"
+        bsPos += 13;
         while (bsPos < stateContent.length() && (stateContent[bsPos] == ' ' || stateContent[bsPos] == '\t')) bsPos++;
         std::string bsStr;
         while (bsPos < stateContent.length() && stateContent[bsPos] >= '0' && stateContent[bsPos] <= '9') {
@@ -94,13 +84,9 @@ int applyAdapter(const std::string& configFile) {
             Logger::getInstance().info("Engine confirmed: sampleRate=" + srStr + ", BufferSize=" + bsStr);
             break;
         }
-
-        Logger::getInstance().info("Waiting for engine confirm: have " + srStr + "/" + bsStr +
-                                   ", need " + std::to_string(config.sampleRate) + "/" + std::to_string(config.bufferSize));
     }
 
     Logger::getInstance().info("Configuration applied successfully");
     std::cout << "{\"ok\":true}" << std::endl;
-
     return 0;
 }

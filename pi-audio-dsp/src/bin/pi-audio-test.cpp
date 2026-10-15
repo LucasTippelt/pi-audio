@@ -6,21 +6,11 @@
 int main(int argc, char* argv[]) {
     Logger::getInstance().init("/var/log/pi-audio/test.log");
 
-    std::string driver = "Woofer_L";
-    if (argc >= 2) {
-        driver = argv[1];
-    } else {
-        std::string jsonInput;
-        std::string line;
-        while (std::getline(std::cin, line)) {
-            jsonInput += line;
-        }
-        if (jsonInput.find("Woofer_L") != std::string::npos) driver = "Woofer_L";
-        else if (jsonInput.find("Tweeter_L") != std::string::npos) driver = "Tweeter_L";
-        else if (jsonInput.find("Woofer_R") != std::string::npos) driver = "Woofer_R";
-        else if (jsonInput.find("Tweeter_R") != std::string::npos) driver = "Tweeter_R";
-        else if (jsonInput.find("Mic") != std::string::npos) driver = "Mic";
+    if (argc < 2) {
+        std::cerr << "Usage: pi-audio-test <driver>" << std::endl;
+        std::cerr << "Drivers: Tweeter, Woofer, PGM_L, PGM_R, Mic_1..Mic_6" << std::endl;
+        return 1;
     }
 
-    return testAdapter(driver);
+    return testAdapter(argv[1]);
 }

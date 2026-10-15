@@ -4,6 +4,5 @@
 
 int main() {
     Logger::getInstance().init("/var/log/pi-audio/measure.log");
-    
     return measureAdapter();
 }
