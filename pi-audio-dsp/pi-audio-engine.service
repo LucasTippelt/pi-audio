@@ -1,12 +1,14 @@
 [Unit]
 Description=Pi Audio DSP Engine
-After=sound.target
+After=sound.target pi-audio-ws-server.service
 
 [Service]
 Type=simple
-ExecStartPre=/bin/bash -c 'mkdir -p /run/pi-audio && chown pi:audio /run/pi-audio && chmod 775 /run/pi-audio || true'
+RuntimeDirectory=pi-audio
+RuntimeDirectoryMode=0775
 ExecStart=/usr/local/bin/pi-audio-engine /etc/pi-audio/config/current.json /var/log/pi-audio/engine.log
 Restart=on-failure
+RestartSec=3
 User=pi
 Group=audio
 

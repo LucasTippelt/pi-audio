@@ -11,6 +11,13 @@ class AudioPlaybackProcessor extends AudioWorkletProcessor {
     this.initDone = false;
     this.processCount = 0;
 
+    /* Fractional resampler: consume ring slightly slower than real-time so buffer fills */
+    this.consumptionRate = 0.997;
+    this.phase = 0;
+    this.bufIndex = 0;
+    this.s0 = 0;
+    this.s1 = 0;
+
     this.port.onmessage = (e) => {
       const d = e.data;
       if (d.type === 'init') {
@@ -54,32 +61,33 @@ class AudioPlaybackProcessor extends AudioWorkletProcessor {
     if (!this.warmupDone) {
       if (this.ringSize >= this.warmupMin) {
         this.warmupDone = true;
+        this.bufIndex = this.ringRPos;
+        this.s0 = this.ringBuf[this.bufIndex];
+        this.s1 = this.s0;
+        this.phase = 0;
       } else {
         out.fill(0);
         return true;
       }
     }
 
-    const r = this.ringRPos;
-    const avail = this.ringSize;
-    const take = Math.min(avail, len);
-
-    if (take > 0) {
-      const end = r + take;
-      if (end <= this.ringBuf.length) {
-        out.set(this.ringBuf.subarray(r, end), 0);
-      } else {
-        const first = this.ringBuf.length - r;
-        out.set(this.ringBuf.subarray(r), 0);
-        out.set(this.ringBuf.subarray(0, take - first), first);
+    const buf = this.ringBuf;
+    const cap = buf.length;
+    for (let i = 0; i < len; i++) {
+      this.phase += this.consumptionRate;
+      if (this.phase >= 1 && this.ringSize > 0) {
+        this.s0 = this.s1;
+        this.s1 = buf[this.bufIndex];
+        this.bufIndex = (this.bufIndex + 1) % cap;
+        this.ringSize--;
+        this.phase -= 1;
       }
-      this.ringRPos = (r + take) % this.ringBuf.length;
-      this.ringSize -= take;
+      /* Linear interpolation between s0 (previous) and s1 (current) */
+      out[i] = this.s0 + (this.s1 - this.s0) * Math.max(0, this.phase);
     }
 
-    if (take < len) {
-      out.fill(0, take);
-      this.dropCount += (len - take);
+    if (this.ringSize === 0) {
+      this.dropCount += len;
     }
 
     this.processCount++;

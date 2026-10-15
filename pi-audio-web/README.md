@@ -1,6 +1,6 @@
 # Pi Audio Web Interface
 
-PHP/Apache control surface for the Pi Audio DSP engine. Tuning and preset data are stored as JSON under `/etc/pi-audio/config/` and `/etc/pi-audio/presets/`. Part of the [pi-audio](..) monorepo.
+PHP/Apache control surface for the Pi Audio DSP engine. Single-speaker system with tweeter/woofer outputs, configurable 2-6 mic inputs. Tuning and preset data stored as JSON under `/etc/pi-audio/config/` and `/etc/pi-audio/presets/`. Part of the [pi-audio](..) monorepo.
 
 ## Files
 
@@ -8,12 +8,10 @@ PHP/Apache control surface for the Pi Audio DSP engine. Tuning and preset data a
 |---|---|
 | `api.php` | REST API — state management, presets, DSP commands |
 | `index.php` | Main UI (HTML + JS) |
-| `debug.php` | Debug page — env vars, permissions, binary runtime status, monitor ring buffers, engine state vs config |
-| `audio-debug.html` | Real-time audio monitor — fetches chunks via WebSocket or chunked HTTP |
-| `ws-audio-server-node.js` | WebSocket relay server (Node.js, port 8765) |
+| `debug.php` | Debug page — env vars, permissions, binary status, per-channel monitor ring buffers (shared memory), engine state vs config |
+| `audio-debug.html` | Real-time audio monitor — stability relay on port 8765, direct engine WebSocket on port 8768, or low-latency HTTP stream on port 8767 |
+| `ws-audio-server-node.js` | Stability-oriented WebSocket relay server (Node.js, port 8765, receives engine data on 8766) |
 | `VERSION.json` | Auto-generated version info |
-| `audio-stream.php` | Legacy streaming endpoint (long-lived connection, prone to disconnects) |
-| `audio-chunk.php` | Chunked audio endpoint — fixed-size chunks per request, reliable |
 | `assets/` | CSS, JavaScript, static assets |
 
 ## Deploy on Raspberry Pi
@@ -56,7 +54,7 @@ For mod_php, `ProcSubset=all` and `DeviceAllow=/dev/snd/controlC0 rw` in the Apa
 
 ## DSP Integration
 
-`current.json` is atomically replaced after updates. Its fields are `input`, `output`, `sampleRate`, `volume`, `muted`, `crossovers` (independent `frequency`, `topology`, and `slope` settings for each driver), `bands` (per-driver PEQ arrays), `drivers` (`name`, `delayMs`, `trimDb`, `phaseInverted`), `limiter` (`enabled`, `threshold`, `release`), optional `measurement` data, and optional `roomCorrection` parameters.
+`current.json` is atomically replaced after updates. Its fields are `input`, `output`, `sampleRate`, `BufferSize`, `micCount`, `volume`, `muted`, `crossovers` (per-output: `frequency`, `topology`, `slope`), `bands` (per-output PEQ arrays), `drivers` (`name`, `delayMs`, `trimDb`, `phaseInverted`), `limiter` (`enabled`, `threshold`, `release`), `monitorChannel`, optional `measurement`.
 
 ### Applying configuration to the audio engine
 
@@ -77,21 +75,38 @@ The header's **DSP connection** indicator requires `PI_AUDIO_STATUS_BIN`; it pol
 
 ### Testing a speaker
 
-Configure the corresponding Apache environment variable for each adapter. Each adapter receives a JSON object on stdin containing its selected `driver` and current playback `output`. It must emit a short, low-level test signal only on that selected speaker.
-
 ```sh
 sudo install -o root -g root -m 0755 pi-audio-test /usr/local/bin/pi-audio-test
-sudo -u www-data test -x /usr/local/bin/pi-audio-test
 sudo systemctl reload apache2
 ```
 
+Supported drivers: `Tweeter`, `Woofer`, `PGM_L`, `PGM_R`, `Mic_1`..`Mic_6`.
+
+**Test mode routing:**
+- **Tweeter test**: signal plays through tweeter DSP only, woofer silent, PGM suspended
+- **Woofer test**: signal plays through woofer DSP only, tweeter silent, PGM suspended
+- **PGM_L test**: no physical speakers, PGM monitoring shows raw input
+- **PGM_R test**: no physical speakers, PGM monitoring shows raw input
+
+The engine detects test mode via `/dev/shm/pi-audio-test-mode` control file. The test tool signals the engine before writing data and clears the mode after consumption.
+
+Each driver requires a matching `PI_AUDIO_TEST_BIN_<DRIVER>` environment variable in Apache config (e.g. `PI_AUDIO_TEST_BIN_TWEETER`). The `test-pgm` action uses `PI_AUDIO_TEST_BIN_PGM_L` or falls back to `/usr/local/bin/pi-audio-test`.
+
+**Troubleshooting:** If tests fail with `"write failed"`, stale shared memory from a previous `sudo` run may block creation. Clean with: `sudo rm -f /dev/shm/pi-audio-test-* /dev/shm/pi-audio-test-mode`
+
 ### Room measurement
 
-Set `PI_AUDIO_MEASURE_BIN` in Apache's environment to an executable DSP/measurement adapter. The adapter receives the current configuration as JSON on stdin, runs its calibrated measurement workflow, and writes JSON to stdout with `responses`, and optional `autoconfiguration` (`crossovers`, `bands`, `drivers`).
+Set `PI_AUDIO_MEASURE_BIN` in Apache's environment to an executable measurement adapter (not yet implemented).
 
 ### Live metrics
 
 Metrics use sampled CPU counters from `/proc/stat`, `/sys/class/thermal/thermal_zone0/temp`, and the integer in `/run/pi-audio/xruns`. Set `PI_AUDIO_XRUN_FILE` to override the path.
+
+### Shared memory ring buffers
+
+The engine uses POSIX shared memory (`shm_open` + `mmap`) instead of file-based ring buffers for all audio data transfer. Ring buffers are visible at `/dev/shm/pi-audio-*`. External writers (test adapter, external sources) access the same shared memory objects.
+
+Test injection uses per-channel shared memory buffers (`pi-audio-test-tweeter`, `pi-audio-test-woofer`) with a 12-byte `PIIJ` header (`magic[4]`, `frameCount[4]`, `readPos[4]`) followed by raw float32 data. The engine reads frames and advances `readPos`, resetting both to 0 when fully consumed. A control file (`pi-audio-test-mode`) signals the active test type to the engine.
 
 To verify CPU monitoring, install `stress-ng` and run a short load test:
 
@@ -112,19 +127,25 @@ All endpoints handled by `api.php` via `action` query parameter.
 | `save` | POST | Save preset (staging or production) |
 | `master` | POST | Update master volume/mute |
 | `apply` | POST | Push config to running engine |
-| `test-speaker` | POST | Run speaker test |
+| `test-speaker` | POST | Run speaker test (tweeter/woofer/mic) |
+| `test-pgm` | POST | Run PGM_L input test (monitoring only, no speakers) |
 | `preset-*` | POST | Preset CRUD operations |
 
-## Audio Chunk Endpoint
+## HTTP Stream Monitoring (Recommended)
 
-`audio-chunk.php` returns fixed-size audio chunks from monitor ring buffers. Replaces long-lived streaming for reliability.
+The engine's built-in HTTP stream server (port 8767) serves real-time audio directly to the browser. No Node.js relay required.
 
-| Parameter | Default | Description |
-|---|---|---|
-| `channel` | `pgm-l` | Monitor channel (pgm-l, pgm-r, woofer-l/r, tweeter-l/r, mic) |
-| `duration` | `1.5` | Seconds of audio per chunk |
-| `format` | `raw` | `raw` (float32) or `base64` |
-| `engineRate` | auto | Engine sample rate from `dsp-status` |
+| Endpoint | Description |
+|---|---|
+| `GET /stream?ch=&lt;channel&gt;` | Raw float32LE mono, HTTP chunked transfer encoding |
+| `GET /status` | JSON: sampleRate, BufferSize, volume, muted |
+| `GET /` | Channel list (JSON array) |
+
+Channels: `pgm-l`, `pgm-r`, `tweeter`, `woofer`, `mic-1`..`mic-6`.
+
+## WebSocket Monitoring
+
+The Node.js relay on port 8765 is the stability-oriented monitor path, while the built-in HTTP stream on port 8767 is the low-latency option. The engine also exposes a direct WebSocket endpoint on port 8768 for raw browser access.
 
 ## Environment Variables
 
@@ -134,8 +155,12 @@ Set in Apache virtual host config (`/etc/apache2/sites-enabled/pi-audio.conf`):
 |---|---|---|
 | `PI_AUDIO_STATUS_BIN` | `/usr/local/bin/pi-audio-status` | Yes |
 | `PI_AUDIO_APPLY_BIN` | `/usr/local/bin/pi-audio-apply` | Yes |
+| `PI_AUDIO_TEST_BIN_PGM_L` | `/usr/local/bin/pi-audio-test` | For PGM test |
+| `PI_AUDIO_TEST_BIN_PGM_R` | `/usr/local/bin/pi-audio-test` | For PGM R test |
+| `PI_AUDIO_TEST_BIN_TWEETER` | `/usr/local/bin/pi-audio-test` | For Tweeter test |
+| `PI_AUDIO_TEST_BIN_WOOFER` | `/usr/local/bin/pi-audio-test` | For Woofer test |
+| `PI_AUDIO_TEST_BIN_MIC_1`..`MIC_6` | `/usr/local/bin/pi-audio-test` | For mic tests |
 | `PI_AUDIO_MEASURE_BIN` | `/usr/local/bin/pi-audio-measure` | Optional |
-| `PI_AUDIO_TEST_BIN_*` | `/usr/local/bin/pi-audio-test` | Optional |
 | `PI_AUDIO_CONFIG_DIR` | `/etc/pi-audio/config` | Optional |
 | `PI_AUDIO_PRESETS_DIR` | `/etc/pi-audio/presets` | Optional |
 | `PI_AUDIO_CARD` | `0` | Optional |
@@ -151,7 +176,10 @@ Set in Apache virtual host config (`/etc/apache2/sites-enabled/pi-audio.conf`):
 | `/run/pi-audio/status` | Engine status file |
 | `/run/pi-audio/engine-state.json` | Engine parameters (written every second) |
 | `/run/pi-audio/reload` | Reload trigger |
-| `/run/pi-audio/monitor-{channel}.raw` | Per-channel monitor ring buffers (4MB each) |
+| `/dev/shm/pi-audio-monitor-{channel}` | Per-channel monitor ring buffers (4MB each, POSIX shared memory) |
+| `/dev/shm/pi-audio-test-tweeter` | Tweeter test injection buffer (4MB, POSIX shared memory) |
+| `/dev/shm/pi-audio-test-woofer` | Woofer test injection buffer (4MB, POSIX shared memory) |
+| `/dev/shm/pi-audio-test-mode` | Test mode control file |
 
 ## Permissions
 
@@ -178,7 +206,7 @@ Access at `http://<ip>/debug.php` (auto-refreshes every 5 seconds):
 - Environment variables, PHP/server info
 - Configuration files, current config, adapter binaries
 - Binary runtime status (PIDs, last run time, success/error)
-- Monitor ring buffer headers (magic, sample rate, channels, write position, usage %)
+- Monitor ring buffer headers (shared memory: magic, sample rate, channels, write position, usage %)
 - ALSA devices, DSP connection status
 - Engine state vs config comparison
 - Systemd service status and journal output
@@ -188,14 +216,20 @@ Access at `http://<ip>/debug.php` (auto-refreshes every 5 seconds):
 
 Access at `http://<ip>/audio-debug.html`:
 
-- WebSocket connection to `ws-audio-server-node.js` (port 8765)
-- 200ms ring buffer (9,600 samples) with 50ms warmup threshold
-- Web Audio playback via ScriptProcessorNode (bufSize=256) for low-latency callback
-- Canvas waveform visualization with `copyWithin` to avoid GC storms
-- Per-channel selection (PGM L/R, woofer/tweeter L/R, mic) with channel enable/disable control
-- Auto sample rate detection from `dsp-status`
-- Metrics: sample rate, queue level, RMS level, buffers queued, drop count, callback drop rate, events, available samples
-- WebSocket rate logging (5s intervals)
+- Dual transport: Node.js relay WebSocket on port 8765 ("Stability") or low-latency HTTP stream on port 8767 ("Lower Latency"), with the direct engine WebSocket on port 8768 as an additional raw path
+- WebSocket: binary frames via `onmessage`, lower jitter
+- HTTP: chunked transfer via `fetch()` + `ReadableStream`
+- Adaptive gapless audio playback using `AudioBufferSourceNode` scheduling — scheduler interval, ring buffer safety margin, chunk size, and headroom threshold all scale with server sampleRate and bufferSize
+- Transport switch during playback restarts stream with new transport
+- Auto-reconnect on server drop (200ms delay for WebSocket, immediate for HTTP)
+- Canvas waveform visualization
+- Per-channel selection (PGM L/R, tweeter, woofer, mic-1..mic-6)
+- Auto sample rate and buffer size detection from server ack/status
+- Metrics: sample rate, buffer size, queue level, RMS level, buffers queued, drop count, stream gap
+
+### Test Buttons
+
+The web UI provides test buttons for tweeter, woofer, and PGM input. A 1-second cooldown prevents overlapping tests. All test buttons are disabled while any test is running.
 
 ## Security
 

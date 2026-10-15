@@ -23,8 +23,8 @@ cd "$REPO_DIR"
 sudo mkdir -p /etc/pi-audio/config
 sudo mkdir -p /etc/pi-audio/presets
 sudo mkdir -p /var/log/pi-audio
-sudo mkdir -p /run/pi-audio
-sudo chown pi:audio /run/pi-audio
+sudo chown pi:audio /var/log/pi-audio
+sudo chmod 775 /var/log/pi-audio
 
 # Set group to audio so www-data (in audio group) can read/write
 sudo chown -R pi:audio /etc/pi-audio/
@@ -71,17 +71,12 @@ fi
 # Install systemd service for audio engine
 sudo cp "$DSP_DIR/pi-audio-engine.service" /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo mkdir -p /etc/pi-audio/config
-sudo mkdir -p /etc/pi-audio/presets
-sudo mkdir -p /var/log/pi-audio
-sudo mkdir -p /run/pi-audio
-sudo chown pi:audio /run/pi-audio
-sudo chmod 775 /run/pi-audio
 
 # Install WebSocket server service
 sudo cp "$REPO_DIR/pi-audio-ws-server.service" /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable pi-audio-ws-server
+sudo systemctl enable pi-audio-engine
 
 # Call redeploy.sh to install binaries and restart all services
 echo ""

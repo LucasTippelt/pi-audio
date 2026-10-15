@@ -17,8 +17,6 @@ const ui = {
   lastApplyAttempt: null,
   measurementReady: false,
   applyReady: false,
-  crossoverSide: 'left',
-  peqSide: 'left',
   expanded: { peq: true },
   delayUnit: 'ms',
   saveTimer: null,
@@ -29,25 +27,24 @@ const ui = {
   pendingAction: null,
   confirmReturnFocus: null,
   destructiveBusy: false,
+  testBusy: false,
 };
 
 const defaults = {
-  input: 'default', output: 'default', sampleRate: 48000, BufferSize: 512, volume: 65, muted: false,
-  crossovers: {
-    Woofer_L: { frequency: 80, topology: 'Linkwitz-Riley', slope: 24 },
-    Tweeter_L: { frequency: 80, topology: 'Linkwitz-Riley', slope: 24 },
-    Woofer_R: { frequency: 80, topology: 'Linkwitz-Riley', slope: 24 },
-    Tweeter_R: { frequency: 80, topology: 'Linkwitz-Riley', slope: 24 },
-  },
-  bands: { Woofer_L: [], Tweeter_L: [], Woofer_R: [], Tweeter_R: [] },
-  drivers: [
-    { name: 'Woofer_L', delayMs: 0, trimDb: 0, phaseInverted: false },
-    { name: 'Tweeter_L', delayMs: 0, trimDb: 0, phaseInverted: false },
-    { name: 'Woofer_R', delayMs: 0, trimDb: 0, phaseInverted: false },
-    { name: 'Tweeter_R', delayMs: 0, trimDb: 0, phaseInverted: false },
-  ],
-  limiter: { enabled: true, threshold: -1, release: 80 },
-  measurement: null,
+    input: 'default', output: 'default', sampleRate: 48000, BufferSize: 512,
+    micCount: 2, volume: 65, muted: false,
+    crossovers: {
+        Woofer: { frequency: 2500, topology: 'Linkwitz-Riley', slope: 24 },
+        Tweeter: { frequency: 2500, topology: 'Linkwitz-Riley', slope: 24 },
+    },
+    bands: { Woofer: [], Tweeter: [] },
+    drivers: [
+        { name: 'Woofer', delayMs: 0, trimDb: 0, phaseInverted: false },
+        { name: 'Tweeter', delayMs: 0, trimDb: 0, phaseInverted: false },
+    ],
+    limiter: { enabled: true, threshold: -1, release: 80 },
+    monitorChannel: 'tweeter',
+    measurement: null,
 };
 
 async function request(action, body) {
@@ -90,7 +87,7 @@ function setSaveStatus(text, pending = false) {
   el.textContent = text;
   el.classList.toggle('pending', pending);
   if (pending) {
-    el.innerHTML = text + ' <button type="button" class="status-clear">✕</button>';
+    el.innerHTML = text + ' <button type="button" class="status-clear">\u2715</button>';
     el.querySelector('.status-clear').addEventListener('click', () => {
       el.textContent = 'Changes save to the active configuration';
       el.classList.remove('pending');
@@ -134,7 +131,7 @@ function updateActiveStatus(active = ui.activeConfiguration) {
     ? `${active.name} ${active.version[0].toUpperCase()}${active.version.slice(1)} ${active.saved ? 'saved' : 'unsaved'}`
     : '';
   const label = attempt && !attempt.success
-    ? `apply failed for ${attemptedName}${activeName ? ` · last successful: ${activeName}` : ''}`
+    ? `apply failed for ${attemptedName}${activeName ? ' \u00b7 last successful: ' + activeName : ''}`
     : activeName || 'not applied this session';
   $('#active-status').textContent = `Active: ${label}`;
 }
@@ -143,7 +140,7 @@ function updateApplyButton() {
   const button = $('#apply-button');
   updateViewStatus();
   const source = $('#view-status').textContent.replace(/^Viewing:\s*/, '');
-  button.innerHTML = '<span aria-hidden="true">↻</span> Apply current.json to engine';
+  button.innerHTML = '<span aria-hidden="true">\u21bb</span> Apply current.json to engine';
   button.title = `Apply current.json (${source}) to the audio engine${ui.applyReady ? '' : '. Configure PI_AUDIO_APPLY_BIN to enable the adapter'}`;
 }
 
@@ -154,7 +151,7 @@ function queueSave() {
   setSaveStatus('Unsaved changes', true);
   if (ui.currentSource) ui.currentSource.saved = false;
   updateApplyButton();
-  drawCurve();
+  drawCurves();
   ui.saveTimer = setTimeout(() => {
     ui.saveTimer = null;
     saveState();
@@ -194,7 +191,6 @@ async function saveState() {
   }
   return ui.savedRevision === ui.saveRevision;
 }
-
 function renderInputs() {
   const select = $('#audio-input');
   const inputs = [...new Set(['default', ...ui.inputs, ui.state.input])];
@@ -209,6 +205,30 @@ function renderInputs() {
     : 'Input, sample rate, and buffer size are saved to staging; apply the version to load it in the engine.';
 }
 
+function renderMicCount() {
+  const select = $('#mic-count');
+  const count = ui.state.micCount || 2;
+  select.value = String(count);
+  $('#mic-note').textContent = `${count} measurement microphone input(s) configured.`;
+}
+
+function renderMonitorChannel() {
+  const select = $('#monitor-select');
+  const count = ui.state.micCount || 2;
+  let options = '<option value="none">\u2014 No monitoring \u2014</option>';
+  options += '<option value="pgm-l">PGM Left (DSP)</option>';
+  options += '<option value="pgm-r">PGM Right (passthrough)</option>';
+  options += '<option value="tweeter">Tweeter output</option>';
+  options += '<option value="woofer">Woofer output</option>';
+  for (let i = 1; i <= count; i++) {
+    options += `<option value="mic-${i}">Mic ${i}</option>`;
+  }
+  select.innerHTML = options;
+  const channel = ui.state.monitorChannel || 'none';
+  select.value = channel;
+  $('#monitor-note').textContent = 'Select one channel to listen in the browser. Non-realtime monitoring.';
+}
+
 function renderOutputs() {
   const select = $('#audio-output');
   const outputs = [...new Set(['default', ...ui.outputs, ui.state.output])];
@@ -218,7 +238,7 @@ function renderOutputs() {
 }
 
 function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
+  return String(value).replace(/[&<>\"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 }
 
 function displayDelay(ms) {
@@ -243,10 +263,10 @@ function renderDrivers() {
 }
 
 function renderCrossovers() {
-  const names = ui.crossoverSide === 'left' ? ['Woofer_L', 'Tweeter_L'] : ['Woofer_R', 'Tweeter_R'];
+  const names = ['Woofer', 'Tweeter'];
   $('#crossover-list').innerHTML = names.map((name) => {
     const crossover = ui.state.crossovers[name];
-    const filterType = name.startsWith('Woofer_') ? 'LOW-PASS' : 'HIGH-PASS';
+    const filterType = name === 'Woofer' ? 'LOW-PASS' : 'HIGH-PASS';
     return `<article class="crossover-card">
       <div class="crossover-card-head"><span>${filterType}</span><strong>${name}</strong></div>
       <div class="crossover-card-fields">
@@ -256,16 +276,10 @@ function renderCrossovers() {
       </div>
     </article>`;
   }).join('');
-  document.querySelectorAll('[data-crossover-side]').forEach((button) => {
-    const active = button.dataset.crossoverSide === ui.crossoverSide;
-    button.classList.toggle('active', active);
-    button.setAttribute('aria-pressed', String(active));
-  });
 }
 
 function renderBands() {
-  const suffix = ui.peqSide === 'left' ? 'L' : 'R';
-  const drivers = { woofer: `Woofer_${suffix}`, tweeter: `Tweeter_${suffix}` };
+  const drivers = { woofer: 'Woofer', tweeter: 'Tweeter' };
   Object.entries(drivers).forEach(([type, driverName]) => {
     const bands = ui.state.bands[driverName];
     $(`#${type}-band-list`).innerHTML = bands.map((band, index) => `
@@ -275,15 +289,10 @@ function renderBands() {
         <label class="band-q"><span>Q</span><input data-band-driver="${driverName}" data-band-q="${escapeHtml(band.id)}" type="number" min="0.1" max="18" step="0.1" value="${band.q}" aria-label="${driverName} band ${index + 1} Q factor"></label>
         <label class="band-gain"><span>GAIN</span><input data-band-driver="${driverName}" data-band-gain="${escapeHtml(band.id)}" type="number" min="-18" max="18" step="0.1" value="${Number(band.gain).toFixed(1)}" aria-label="${driverName} band ${index + 1} gain"><b>dB</b></label>
         <button class="band-bypass ${band.enabled ? '' : 'active'}" data-band-driver="${driverName}" data-band-toggle="${escapeHtml(band.id)}" type="button" aria-label="${band.enabled ? 'Bypass' : 'Enable'} ${driverName} band ${index + 1}" aria-pressed="${!band.enabled}"><span></span></button>
-        <button class="band-remove" data-band-driver="${driverName}" data-band-remove="${escapeHtml(band.id)}" type="button" aria-label="Remove ${driverName} band ${index + 1}">×</button>
+        <button class="band-remove" data-band-driver="${driverName}" data-band-remove="${escapeHtml(band.id)}" type="button" aria-label="Remove ${driverName} band ${index + 1}">\u00d7</button>
       </article>`).join('');
     $(`#${type}-band-count`).textContent = String(bands.length).padStart(2, '0');
     $(`[data-add-band="${type}"]`).disabled = bands.length >= 12;
-  });
-  document.querySelectorAll('[data-peq-side]').forEach((button) => {
-    const active = button.dataset.peqSide === ui.peqSide;
-    button.classList.toggle('active', active);
-    button.setAttribute('aria-pressed', String(active));
   });
 }
 
@@ -305,9 +314,9 @@ function renderPresets() {
     <strong>${escapeHtml(name)}</strong>
     <button type="button" data-preset-select="${escapeHtml(name)}" data-preset-version="staging" aria-pressed="${name === ui.selectedPreset && ui.presetVersion === 'staging'}">Staging</button>
     <button type="button" data-preset-select="${escapeHtml(name)}" data-preset-version="production" aria-pressed="${name === ui.selectedPreset && ui.presetVersion === 'production'}">Production</button>
-    ${name === 'Default' ? '' : `<button type="button" class="preset-delete" data-preset-delete="${escapeHtml(name)}" aria-label="Delete ${escapeHtml(name)}">×</button>`}
+    ${name === 'Default' ? '' : `<button type="button" class="preset-delete" data-preset-delete="${escapeHtml(name)}" aria-label="Delete ${escapeHtml(name)}">\u00d7</button>`}
   </div>`).join('');
-  $('#preset-mode').textContent = `${ui.selectedPreset} · ${ui.presetVersion}${ui.presetVersion === 'production' ? ' (tuning read-only)' : ''}`;
+  $('#preset-mode').textContent = `${ui.selectedPreset} \u00b7 ${ui.presetVersion}${ui.presetVersion === 'production' ? ' (tuning read-only)' : ''}`;
   $('#promote-preset').disabled = ui.presetVersion !== 'staging';
   $('#copy-production-to-staging').disabled = ui.presetVersion !== 'production';
   $('#apply-button').disabled = false;
@@ -334,14 +343,16 @@ function updatePresetSelection() {
   renderPresets();
 }
 
-function measurementResponse(side) {
+function measurementResponse() {
   const measurement = ui.state.measurement;
-  return measurement && measurement.responses ? measurement.responses[side] : null;
+  return measurement && measurement.responses ? measurement.responses : null;
 }
 
 function renderState(includePresets = true) {
   renderInputs();
   renderOutputs();
+  renderMicCount();
+  renderMonitorChannel();
   renderBands();
   renderDrivers();
   renderCrossovers();
@@ -356,19 +367,18 @@ function renderState(includePresets = true) {
   $('#limiter-threshold').value = ui.state.limiter.threshold;
   $('#limiter-release').value = ui.state.limiter.release;
   $('#curve-caption').textContent = ui.state.measurement
-    ? `LEFT AND RIGHT · MEASURED ${new Date(ui.state.measurement.measuredAt).toLocaleString()}`
+    ? `MEASURED ${new Date(ui.state.measurement.measuredAt).toLocaleString()}`
     : '';
-  drawCurve();
+  drawCurves();
 }
 
 function addBand(driverName) {
   const bands = ui.state.bands[driverName];
   if (bands.length >= 12) return;
-  bands.push({ id: `b${Date.now().toString(36)}`, enabled: true, frequency: driverName.startsWith('Woofer_') ? 50 : 1000, q: 1, gain: 0 });
+  bands.push({ id: `b${Date.now().toString(36)}`, enabled: true, frequency: driverName === 'Woofer' ? 50 : 1000, q: 1, gain: 0 });
   renderBands();
   queueSave();
 }
-
 function setMaster() {
   clearTimeout(ui.saveTimer);
   ui.saveRevision += 1;
@@ -407,8 +417,8 @@ function dspSettingsMatch(status) {
     && status.BufferSize === ui.state.BufferSize);
 }
 
-function drawCurve() {
-  const canvas = $('#response-chart');
+function drawCurve(driver, canvasId) {
+  const canvas = $(canvasId);
   if (!canvas) return;
   const rect = canvas.getBoundingClientRect();
   if (!rect.width || !rect.height) return;
@@ -421,12 +431,13 @@ function drawCurve() {
   const height = rect.height;
   const pad = { left: 43, right: 10, top: 8, bottom: 22 };
   const chartW = width - pad.left - pad.right;
-  const laneGap = 56;
-  const laneHeight = (height - pad.top - pad.bottom - laneGap) / 2;
+  const laneHeight = height - pad.top - pad.bottom;
+  const minHz = driver === 'Tweeter' ? 1000 : 20;
+  const maxHz = 20000;
   const minDb = -24;
   const maxDb = 12;
-  const xFor = (hz) => pad.left + (Math.log10(hz / 20) / 3) * chartW;
-  const yFor = (db, top) => top + ((maxDb - db) / (maxDb - minDb)) * laneHeight;
+  const xFor = (hz) => pad.left + (Math.log10(hz / minHz) / Math.log10(maxHz / minHz)) * chartW;
+  const yFor = (db) => pad.top + ((maxDb - db) / (maxDb - minDb)) * laneHeight;
   ctx.clearRect(0, 0, width, height);
   ctx.font = '10px "DM Mono", monospace';
   ctx.lineWidth = 1;
@@ -448,26 +459,30 @@ function drawCurve() {
       ? -20 * Math.log10(1 + power)
       : -10 * Math.log10(1 + power);
   };
-  const filterModelResponse = (hz, side) => {
-    const suffix = side === 'left' ? 'L' : 'R';
-    const wooferName = `Woofer_${suffix}`;
-    const tweeterName = `Tweeter_${suffix}`;
-    const wooferDb = bandResponse(hz, wooferName) + filterResponse(hz, ui.state.crossovers[wooferName], true);
-    const tweeterDb = bandResponse(hz, tweeterName) + filterResponse(hz, ui.state.crossovers[tweeterName], false);
-    const wooferMagnitude = Math.pow(10, wooferDb / 20);
-    const tweeterMagnitude = Math.pow(10, tweeterDb / 20);
-    const bothLinkwitzRiley = ui.state.crossovers[wooferName].topology === 'Linkwitz-Riley'
-      && ui.state.crossovers[tweeterName].topology === 'Linkwitz-Riley';
-    const combinedDb = bothLinkwitzRiley
-      ? 20 * Math.log10(wooferMagnitude + tweeterMagnitude)
-      : 10 * Math.log10(wooferMagnitude ** 2 + tweeterMagnitude ** 2);
-    return Math.max(minDb, Math.min(maxDb, combinedDb));
+  const wooferName = 'Woofer';
+  const tweeterName = 'Tweeter';
+  const getResponse = (hz) => {
+    if (driver === 'Combined') {
+      const wooferDb = bandResponse(hz, wooferName) + filterResponse(hz, ui.state.crossovers[wooferName], true);
+      const tweeterDb = bandResponse(hz, tweeterName) + filterResponse(hz, ui.state.crossovers[tweeterName], false);
+      const wooferMagnitude = Math.pow(10, wooferDb / 20);
+      const tweeterMagnitude = Math.pow(10, tweeterDb / 20);
+      const bothLinkwitzRiley = ui.state.crossovers[wooferName].topology === 'Linkwitz-Riley'
+        && ui.state.crossovers[tweeterName].topology === 'Linkwitz-Riley';
+      const combinedDb = bothLinkwitzRiley
+        ? 20 * Math.log10(wooferMagnitude + tweeterMagnitude)
+        : 10 * Math.log10(wooferMagnitude ** 2 + tweeterMagnitude ** 2);
+      return Math.max(minDb, Math.min(maxDb, combinedDb));
+    }
+    const crossover = ui.state.crossovers[driver];
+    const isLowPass = driver === wooferName;
+    return Math.max(minDb, Math.min(maxDb, bandResponse(hz, driver) + filterResponse(hz, crossover, isLowPass)));
   };
-  const drawSeries = (points, color, top, dashed = false) => {
+  const drawSeries = (points, color, dashed = false) => {
     if (!points || !points.length) return;
     ctx.save();
     ctx.beginPath();
-    ctx.rect(pad.left, top, chartW, laneHeight);
+    ctx.rect(pad.left, pad.top, chartW, laneHeight);
     ctx.clip();
     ctx.beginPath();
     ctx.strokeStyle = color;
@@ -475,7 +490,7 @@ function drawCurve() {
     ctx.setLineDash(dashed ? [5, 4] : []);
     points.forEach((point, index) => {
       const x = xFor(point.hz);
-      const y = yFor(point.db, top);
+      const y = yFor(point.db);
       if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     });
     ctx.stroke();
@@ -486,45 +501,52 @@ function drawCurve() {
     [20, '20 Hz'], [50, '50'], [100, '100'], [200, '200'], [500, '500'],
     [1000, '1k'], [2000, '2k'], [5000, '5k'], [10000, '10k'], [20000, '20k'],
   ]);
-  ['left', 'right'].forEach((side, index) => {
-    const top = pad.top + index * (laneHeight + laneGap);
-    for (let db = maxDb; db >= minDb; db -= 3) {
-      const y = yFor(db, top);
-      const labeled = db % 6 === 0;
-      ctx.strokeStyle = db === 0 ? '#a8aaa3' : labeled ? '#deded6' : '#eeede7';
-      ctx.setLineDash(db === 0 ? [4, 4] : []);
-      ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(width - pad.right, y); ctx.stroke();
-      ctx.setLineDash([]);
-      if (labeled) {
-        ctx.fillStyle = '#999b93';
-        ctx.textAlign = 'right';
-        ctx.fillText(String(db), pad.left - 7, y + 3);
-      }
+  for (let db = maxDb; db >= minDb; db -= 3) {
+    const y = yFor(db);
+    const labeled = db % 6 === 0;
+    ctx.strokeStyle = db === 0 ? '#a8aaa3' : labeled ? '#deded6' : '#eeede7';
+    ctx.setLineDash(db === 0 ? [4, 4] : []);
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(width - pad.right, y); ctx.stroke();
+    ctx.setLineDash([]);
+    if (labeled) {
+      ctx.fillStyle = '#999b93';
+      ctx.textAlign = 'right';
+      ctx.fillText(String(db), pad.left - 7, y + 3);
     }
-    [20, 30, 40, 50, 70, 100, 200, 300, 500, 700, 1000, 2000, 3000, 5000, 7000, 10000, 20000].forEach((hz) => {
-      const x = xFor(hz);
-      ctx.strokeStyle = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000].includes(hz) ? '#e3e2da' : '#f0efe9';
-      ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, top + laneHeight); ctx.stroke();
-    });
-    ctx.fillStyle = '#66695e';
-    ctx.textAlign = 'left';
-    ctx.font = '10px "DM Mono", monospace';
-    ctx.fillText(side.toUpperCase(), pad.left + 5, top + 12);
-    const pointCount = Math.max(720, Math.ceil(chartW * dpr * 3));
-    const filterCurve = Array.from({ length: pointCount }, (_, pointIndex) => {
-      const hz = 20 * (1000 ** (pointIndex / (pointCount - 1)));
-      return { hz, db: filterModelResponse(hz, side) };
-    });
-    drawSeries(filterCurve, '#8a9b4a', top);
-    drawSeries(measurementResponse(side), '#e16343', top, true);
-    ctx.fillStyle = '#999b93';
-    ctx.font = '9px "DM Mono", monospace';
-    frequencyLabels.forEach((label, hz) => {
-      ctx.textAlign = hz === 20 ? 'left' : hz === 20000 ? 'right' : 'center';
-      ctx.fillText(label, xFor(hz), top + laneHeight + 13);
-    });
+  }
+  [20, 30, 40, 50, 70, 100, 200, 300, 500, 700, 1000, 2000, 3000, 5000, 7000, 10000, 20000].filter((hz) => hz >= minHz).forEach((hz) => {
+    const x = xFor(hz);
+    ctx.strokeStyle = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000].includes(hz) ? '#e3e2da' : '#f0efe9';
+    ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, pad.top + laneHeight); ctx.stroke();
+  });
+  ctx.fillStyle = '#66695e';
+  ctx.textAlign = 'left';
+  ctx.font = '10px "DM Mono", monospace';
+  ctx.fillText(driver === 'Combined' ? 'COMBINED' : driver.toUpperCase(), pad.left + 5, pad.top + 12);
+  const pointCount = Math.max(720, Math.ceil(chartW * dpr * 3));
+  const filterCurve = Array.from({ length: pointCount }, (_, pointIndex) => {
+    const hz = minHz * ((maxHz / minHz) ** (pointIndex / (pointCount - 1)));
+    return { hz, db: getResponse(hz) };
+  });
+  drawSeries(filterCurve, '#8a9b4a');
+  const measData = measurementResponse();
+  if (measData) {
+    drawSeries(measData, '#e16343', true);
+  }
+  ctx.fillStyle = '#999b93';
+  ctx.font = '9px "DM Mono", monospace';
+  frequencyLabels.forEach((label, hz) => {
+    if (hz < minHz) return;
+    ctx.textAlign = hz === minHz ? 'left' : hz === maxHz ? 'right' : 'center';
+    ctx.fillText(label, xFor(hz), pad.top + laneHeight + 13);
   });
   ctx.setLineDash([]);
+}
+
+function drawCurves() {
+  drawCurve('Combined', '#response-chart-combined');
+  drawCurve('Woofer', '#response-chart-woofer');
+  drawCurve('Tweeter', '#response-chart-tweeter');
 }
 
 async function refreshMetrics() {
@@ -534,7 +556,7 @@ async function refreshMetrics() {
       const data = await request('metrics');
       $('#metric-cpu').innerHTML = `${valueOr(data.cpu, '--')}<small>%</small>`;
       $('#cpu-bar').style.width = `${valueOr(data.cpu, 0)}%`;
-      $('#metric-temp').innerHTML = `${valueOr(data.temperature, '--')}<small>°C</small>`;
+      $('#metric-temp').innerHTML = `${valueOr(data.temperature, '--')}<small>\u00b0C</small>`;
       $('#temp-mark').style.setProperty('--heat', `${Math.max(0, Math.min(100, ((valueOr(data.temperature, 0)) - 35) * 3))}%`);
       $('#metric-xruns').innerHTML = `${valueOr(data.xruns, '--')}<small> count</small>`;
       $('#xrun-foot').textContent = data.xruns === null ? 'counter unavailable' : 'since engine start';
@@ -548,7 +570,7 @@ async function refreshMetrics() {
     } catch (error) {
       $('#metric-cpu').innerHTML = '--<small>%</small>';
       $('#cpu-bar').style.width = '0%';
-      $('#metric-temp').innerHTML = '--<small>°C</small>';
+      $('#metric-temp').innerHTML = '--<small>\u00b0C</small>';
       $('#metric-xruns').innerHTML = '--<small> count</small>';
       const status = $('#metrics-status');
       status.lastChild.textContent = 'OFFLINE';
@@ -569,7 +591,7 @@ async function refreshDspStatus() {
     try {
       const data = await request('dsp-status');
       console.log('[pi-audio] DSP status response:', data);
-      const sampleRate = data.sampleRate ? ` · ${(data.sampleRate / 1000).toFixed(data.sampleRate % 1000 ? 1 : 0)} kHz` : '';
+      const sampleRate = data.sampleRate ? ` \u00b7 ${(data.sampleRate / 1000).toFixed(data.sampleRate % 1000 ? 1 : 0)} kHz` : '';
       status.lastElementChild.textContent = `DSP connection: ${data.connected ? 'Connected' : 'Unavailable'}${sampleRate}`;
       status.title = data.message || '';
       status.classList.toggle('is-error', !data.connected);
@@ -594,7 +616,6 @@ async function refreshDspStatus() {
       status.classList.add('is-error');
       status.classList.remove('is-connected');
       console.error("[pi-audio] DSP status error:", error);
-      console.error("[pi-audio] DSP status error:", error);
       const message = ui.audioApplyError || `DSP status unavailable: ${error.message}`;
       setAudioParameterError('#sample-rate', message);
       setAudioParameterError('#buffer-size', message);
@@ -606,7 +627,6 @@ async function refreshDspStatus() {
   ui.dspStatusPromise = statusRequest;
   return statusRequest;
 }
-
 function showMeasurement(active) {
   $('#measure-overlay').hidden = !active;
   $('#measure-button').disabled = active;
@@ -660,7 +680,7 @@ async function applyToEngine() {
     : 'unsaved current.json';
   updateLoadStatus({ snapshot: source, at: new Date().toISOString() });
   button.disabled = true;
-  button.textContent = 'Applying…';
+  button.textContent = 'Applying\u2026';
   setSaveStatus('Applying configuration to audio engine', true);
   try {
     const result = await request('apply', ui.state);
@@ -679,8 +699,8 @@ async function applyToEngine() {
       notify('Audio engine configuration applied');
     } else {
       const message = !dspStatus || !dspStatus.connected
-        ? `DSP is unavailable${(dspStatus && dspStatus.message) || $('#dsp-status').title ? `: ${(dspStatus && dspStatus.message) || $('#dsp-status').title}` : '.'}`
-        : `DSP did not confirm the requested sample rate and buffer size${dspStatus.message ? `: ${dspStatus.message}` : '.'}`;
+        ? `DSP is unavailable${(dspStatus && dspStatus.message) || $('#dsp-status').title ? ': ' + ((dspStatus && dspStatus.message) || $('#dsp-status').title) : '.'}`
+        : `DSP did not confirm the requested sample rate and buffer size${dspStatus.message ? ': ' + dspStatus.message : '.'}`;
       setAudioApplyFailure(message);
       setSaveStatus('Audio settings could not be confirmed', true);
       notify(message, true);
@@ -750,7 +770,7 @@ async function performDestructiveAction() {
   $('#delete-all-presets').disabled = true;
   $('#copy-production-to-staging').disabled = true;
   $('#restore-defaults').disabled = true;
-  confirmButton.textContent = isDelete ? 'Deleting…' : isCopyToStaging ? 'Copying…' : 'Restoring…';
+  confirmButton.textContent = isDelete ? 'Deleting\u2026' : isCopyToStaging ? 'Copying\u2026' : 'Restoring\u2026';
   if (action === 'restore-defaults') setSaveStatus('Restoring factory defaults', true);
   clearTimeout(ui.saveTimer);
 
@@ -771,7 +791,7 @@ async function performDestructiveAction() {
       const issues = [];
       if (!result.deleted) issues.push(`Could not delete: ${result.deleteErrors.join(', ')}`);
       if (result.currentJsonWritten !== true) issues.push('current.json write was not verified');
-      notify(issues.length ? `Presets deleted · ${issues.join('; ')}` : 'All user presets deleted; Default was kept', issues.length > 0);
+      notify(issues.length ? `Presets deleted \u00b7 ${issues.join('; ')}` : 'All user presets deleted; Default was kept', issues.length > 0);
     } else if (isCopyToStaging) {
       if (ui.saveRevision !== ui.savedRevision && !(await saveState())) throw new Error('Could not save production settings before copying to staging.');
       result = await request(action, { name: ui.selectedPreset, version: ui.presetVersion });
@@ -801,7 +821,7 @@ async function performDestructiveAction() {
       ui.audioApplyError = '';
       refreshDspStatus();
       setSaveStatus(issues.length ? 'Factory defaults restored with warnings' : 'Factory defaults restored', issues.length > 0);
-      notify(issues.length ? `Factory defaults restored · ${issues.join('; ')}` : 'Factory defaults restored', issues.length > 0);
+      notify(issues.length ? `Factory defaults restored \u00b7 ${issues.join('; ')}` : 'Factory defaults restored', issues.length > 0);
     }
   } catch (error) {
     notify(error.message, true);
@@ -819,8 +839,11 @@ async function performDestructiveAction() {
 }
 
 async function testSpeaker(driver, button) {
+  if (ui.testBusy) return;
+  ui.testBusy = true;
+  disableAllTests();
   button.disabled = true;
-  button.textContent = '…';
+  button.textContent = '\u2026';
   clearTimeout(ui.saveTimer);
   let savedChanges = false;
   try {
@@ -832,23 +855,38 @@ async function testSpeaker(driver, button) {
     setSaveStatus(savedChanges ? 'Speaker test failed' : 'Save failed', true);
     notify(error.message, true);
   } finally {
-    button.textContent = 'Test';
-    button.disabled = false;
+    ui.testBusy = false;
+    enableAllTests();
   }
 }
 
 async function testPgm(button) {
+  if (ui.testBusy) return;
+  ui.testBusy = true;
+  disableAllTests();
   button.disabled = true;
-  button.textContent = '…';
+  button.textContent = '\u2026';
   try {
     const result = await request('test-pgm', {});
     notify(`PGM test completed: ${result.tested}`);
   } catch (error) {
     notify(error.message, true);
   } finally {
-    button.textContent = 'Test PGM Input';
-    button.disabled = false;
+    ui.testBusy = false;
+    enableAllTests();
   }
+}
+
+function disableAllTests() {
+  document.querySelectorAll('[data-test-speaker]').forEach(b => { b.disabled = true; b.textContent = '\u2026'; });
+  $('#test-pgm').disabled = true;
+  $('#test-pgm').textContent = '\u2026';
+}
+
+function enableAllTests() {
+  document.querySelectorAll('[data-test-speaker]').forEach(b => { b.disabled = false; b.textContent = 'Test'; });
+  $('#test-pgm').disabled = false;
+  $('#test-pgm').textContent = 'Test PGM Input';
 }
 
 async function quickSavePreset() {
@@ -870,7 +908,7 @@ async function quickSavePreset() {
     ui.savedRevision = ui.saveRevision;
     setCurrentJsonStatus(true);
     renderState();
-    setSaveStatus(`${version === 'production' ? 'Production' : 'Staging'} saved · ${ui.selectedPreset}`);
+    setSaveStatus(`${version === 'production' ? 'Production' : 'Staging'} saved \u00b7 ${ui.selectedPreset}`);
     updateApplyButton();
     notify(`${version === 'production' ? 'Production' : 'Staging'} changes saved to ${ui.selectedPreset}`);
   } catch (error) {
@@ -919,7 +957,6 @@ async function selectPreset(name, version) {
   setSaveStatus(`Loaded ${ui.selectedPreset} ${ui.presetVersion} to current.json`);
   notify(`Loaded ${ui.selectedPreset} ${ui.presetVersion}; apply to engine when ready`);
 }
-
 function bindEvents() {
   $('#master-volume').addEventListener('input', (event) => {
     ui.state.volume = Number(event.target.value);
@@ -941,6 +978,15 @@ function bindEvents() {
     queueSave();
   });
   $('#audio-output').addEventListener('change', (event) => { ui.state.output = event.target.value; queueSave(); });
+  $('#mic-count').addEventListener('change', (event) => {
+    ui.state.micCount = Number(event.target.value);
+    queueSave();
+    renderMonitorChannel();
+  });
+  $('#monitor-select').addEventListener('change', (event) => {
+    ui.state.monitorChannel = event.target.value;
+    queueSave();
+  });
   $('#crossover-list').addEventListener('change', (event) => {
     const field = event.target;
     const name = field.dataset.crossoverFrequency || field.dataset.crossoverSlope || field.dataset.crossoverTopology;
@@ -950,15 +996,11 @@ function bindEvents() {
     if (field.dataset.crossoverTopology) ui.state.crossovers[name].topology = field.value;
     queueSave();
   });
-  document.querySelectorAll('[data-crossover-side]').forEach((button) => button.addEventListener('click', () => {
-    ui.crossoverSide = button.dataset.crossoverSide;
-    renderCrossovers();
-  }));
   document.querySelectorAll('[data-collapse]').forEach((button) => button.addEventListener('click', () => {
     const section = button.dataset.collapse;
     ui.expanded[section] = !ui.expanded[section];
     renderCollapseState();
-    if (section === 'peq') drawCurve();
+    if (section === 'peq') drawCurves();
   }));
   ['limiter-enabled', 'limiter-threshold', 'limiter-release'].forEach((id) => {
     $(`#${id}`).addEventListener('change', (event) => {
@@ -968,13 +1010,8 @@ function bindEvents() {
       queueSave();
     });
   });
-  document.querySelectorAll('[data-peq-side]').forEach((button) => button.addEventListener('click', () => {
-    ui.peqSide = button.dataset.peqSide;
-    renderBands();
-  }));
   document.querySelectorAll('[data-add-band]').forEach((button) => button.addEventListener('click', () => {
-    const suffix = ui.peqSide === 'left' ? 'L' : 'R';
-    addBand(`${button.dataset.addBand === 'woofer' ? 'Woofer' : 'Tweeter'}_${suffix}`);
+    addBand(button.dataset.addBand === 'woofer' ? 'Woofer' : 'Tweeter');
   }));
   $('#peq-content').addEventListener('click', (event) => {
     const toggle = event.target.closest('[data-band-toggle]');
@@ -1073,7 +1110,7 @@ function bindEvents() {
       ui.savedRevision = ui.saveRevision;
       renderPresets();
       renderState(false);
-      setSaveStatus(`Staging saved · ${ui.selectedPreset}`);
+      setSaveStatus(`Staging saved \u00b7 ${ui.selectedPreset}`);
       closePresetModal();
       notify('Preset saved');
     } catch (error) { notify(error.message, true); }
@@ -1134,7 +1171,7 @@ async function init() {
     await refreshDspStatus();
     renderState();
     bindEvents();
-    $('#system-label').textContent = data.alsaReady ? `ALSA connected · ${data.alsaControl}` : 'Configuration ready · ALSA unavailable';
+    $('#system-label').textContent = data.alsaReady ? `ALSA connected \u00b7 ${data.alsaControl}` : 'Configuration ready \u00b7 ALSA unavailable';
     $('#system-label').title = data.alsaReady ? '' : data.alsaMessage;
     if (!data.measurementReady) $('#measure-button').title = 'Configure PI_AUDIO_MEASURE_BIN to enable room measurement';
     setSaveStatus('Configuration loaded');

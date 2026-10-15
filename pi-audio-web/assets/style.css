@@ -43,6 +43,9 @@ button { color: inherit; }
 .button-dark:hover { background: #41443b; }
 .measure-button { min-width: 151px; height: 39px; }
 .measure-icon { color: var(--acid); font-size: 19px; font-weight: 400; line-height: 10px; }
+.test-pgm { margin-top: 10px; border: 1px solid var(--line); background: transparent; border-radius: 2px; padding: 6px 12px; color: #65685e; font-size: 12px; cursor: pointer; width: 100%; }
+.test-pgm:hover { border-color: var(--olive); color: var(--olive); }
+.test-pgm:disabled { opacity: .45; cursor: not-allowed; }
 .overview { min-height: 100px; padding: 8px 0 12px; display: flex; align-items: end; justify-content: space-between; gap: 24px; }
 .eyebrow { margin: 0; color: #8d8f86; font-size: 11px; font-weight: 500; letter-spacing: 1.1px; }
 .eyebrow { margin-bottom: 13px; }
@@ -69,8 +72,9 @@ h1 span { color: var(--olive); }
 .legend-line { display: inline-block; width: 15px; height: 2px; background: var(--coral); }
 .legend-line.estimate { background: var(--olive); }
 .legend-line.measured { background: repeating-linear-gradient(to right, var(--coral) 0 4px, transparent 4px 7px); }
-.chart-wrap { position: relative; flex: 1; min-height: 480px; margin-top: 24px; padding-bottom: 12px; }
-#response-chart { width: 100%; height: 100%; display: block; }
+.chart-grid { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto; gap: 12px; margin-top: 24px; min-height: 0; padding-bottom: 12px; }
+.chart-wrap { position: relative; width: 100%; height: 280px; min-width: 0; }
+.chart-wrap canvas { width: 100%; height: 100%; display: block; }
 .chart-footer { display: flex; justify-content: space-between; align-items: center; padding-top: 9px; color: #a0a198; font-size: 10px; letter-spacing: .5px; }
 .text-button { border: 0; padding: 3px 0; color: #70736b; background: transparent; cursor: pointer; font-size: 12px; }
 .text-button:hover { color: var(--coral); }
@@ -86,9 +90,9 @@ h1 span { color: var(--olive); }
 .field-label { display: block; margin: 11px 0 5px; color: #8c8e85; font-size: 10px; letter-spacing: .55px; }
 .select-control { width: 100%; height: 35px; padding: 0 10px; border: 1px solid var(--line); border-radius: 2px; color: var(--ink); background: #fffefa; outline: 0; font-size: 13px; }
 .select-control.is-error, .select-control.is-error:focus { border-color: var(--coral); box-shadow: 0 0 0 1px var(--coral); }
+.select-control:focus, .text-input:focus { border-color: var(--olive); }
 .input-options { margin-top: 2px; }
 .input-options .field-label { margin-top: 9px; }
-.select-control:focus, .text-input:focus { border-color: var(--olive); }
 .field-note { margin: 5px 0 0; color: #a0a198; font-size: 10px; line-height: 1.5; }
 .split-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 11px; }
 .split-fields .field-label { margin-top: 16px; }
@@ -223,6 +227,8 @@ h1 span { color: var(--olive); }
 .measure-progress { height: 3px; margin: 23px 0 15px; background: #e9e8df; overflow: hidden; }.measure-progress i { display: block; width: 35%; height: 100%; background: var(--olive); animation: sweep 2s ease-in-out infinite alternate; }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 #8a9b4a45; } 100% { box-shadow: 0 0 0 18px #8a9b4a00; } }
 @keyframes sweep { from { transform: translateX(-10%); } to { transform: translateX(200%); } }
+.monitoring-section { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.mic-count-section { margin-top: 12px; }
 
 @media (max-width: 1050px) {
   .app-shell { padding: 24px 30px 0; }
@@ -248,7 +254,8 @@ h1 span { color: var(--olive); }
   .master-block { width: 100%; }
   .workspace { grid-template-columns: 1fr; }
   .response-panel { border-right: 0; border-bottom: 1px solid var(--line); padding: 13px 12px 10px; }
-  .chart-wrap { flex: none; height: 310px; min-height: 0; }
+  .chart-grid { grid-template-columns: 1fr; min-height: 0; }
+  .chart-wrap { height: 260px; min-height: 0; }
   .side-rail .control-section { padding: 13px 14px; }
   .eq-section { margin-top: 8px; padding: 13px 14px; }
   .lower-grid { grid-template-columns: 1fr; margin-top: 8px; }
