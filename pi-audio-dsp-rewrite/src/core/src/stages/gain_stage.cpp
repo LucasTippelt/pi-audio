@@ -3,6 +3,8 @@
 #include "dsp_core/block_info.h"
 #include "dsp_core/portability.h"
 
+#include <cstdio>
+
 GainStage::GainStage()
     : m_targetGain(1.0f), m_currentGain(1.0f), m_muted(false),
       m_rampStart(1.0f), m_rampEnd(1.0f), m_rampRemaining(0) {}
@@ -12,6 +14,9 @@ void GainStage::setGain(float gain) {
     if (gain > 1.f) gain = 1.f;
     m_targetGain = gain;
     startRamp(m_currentGain, gain);
+    { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+      if (df) { std::fprintf(df, "[gain] setGain input=%.4f target=%.4f current=%.4f rampEnd=%.4f\n",
+                gain, m_targetGain, m_currentGain, m_rampEnd); std::fclose(df); } }
 }
 
 void GainStage::setMute(bool muted) {

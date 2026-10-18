@@ -103,14 +103,10 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    /* --- Create GainStages and register with Engine for command routing. --- */
-    GainStage* tweeterGain = new GainStage();
-    GainStage* wooferGain  = new GainStage();
-    engine.core().stageChain(0).addPending(tweeterGain);
-    engine.core().stageChain(1).addPending(wooferGain);
-    engine.core().stageChain(0).swap();
-    engine.core().stageChain(1).swap();
-    engine.setGainStages(tweeterGain, wooferGain);
+    /* --- Create single master GainStage (applied once to ALL outputs after chains). --- */
+    GainStage* masterGain = new GainStage();
+    engine.core().setMasterGain(masterGain);
+    engine.setGainStages(masterGain, masterGain);
 
     /* --- Construct HAL. --- */
 #ifdef __linux__
@@ -447,9 +443,8 @@ int main(int argc, char* argv[]) {
     hal->close();
     delete hal;
 
-    /* Clean up GainStages. */
-    delete tweeterGain;
-    delete wooferGain;
+    /* Clean up master GainStage. */
+    delete masterGain;
 
     /* Remove sentinel file so status adapter reports disconnected. */
     std::remove("/run/pi-audio/status");

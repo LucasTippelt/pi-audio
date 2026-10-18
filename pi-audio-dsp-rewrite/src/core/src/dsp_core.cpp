@@ -74,7 +74,7 @@ void DspCore::process(float* const in[], uint32_t numInCh,
                     const float* pgm = in[m_routing.pgmLIndex];
                     std::memcpy(out[0], pgm, frames * sizeof(float));
                     std::memcpy(out[1], pgm, frames * sizeof(float));
-                } else if (numInCh > 0 && numOutCh >= 2) {
+                } else if (numInCh >= 2 && numOutCh >= 2) {
                     /* Fallback: use input 0 as PGM_L */
                     std::memcpy(out[0], in[0], frames * sizeof(float));
                     std::memcpy(out[1], in[0], frames * sizeof(float));
@@ -161,8 +161,7 @@ void DspCore::process(float* const in[], uint32_t numInCh,
         }
         { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
           if (df) { std::fprintf(df, "[dsp] testMode=%u pre=[%.4f %.4f] post=[%.4f %.4f]\n",
-                    m_testMode, static_cast<double>(prePeak[0]), static_cast<double>(prePeak[1]),
-                    static_cast<double>(postPeak[0]), static_cast<double>(postPeak[1])); std::fclose(df); } }
+                    m_testMode, prePeak[0], prePeak[1], postPeak[0], postPeak[1]); std::fclose(df); } }
     }
 
     /* B6: React to clock-state changes. */
@@ -225,9 +224,7 @@ void DspCore::process(float* const in[], uint32_t numInCh,
     if (m_testMode != 0 && diagTime) {
         FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
         if (df) { std::fprintf(df, "[tel] telPeak=[%.6f %.6f] meterLevel=[%.6f %.6f] clockState=%u\n",
-                  static_cast<double>(telPeak[0]), static_cast<double>(telPeak[1]),
-                  static_cast<double>(m_meterLevel[0]), static_cast<double>(m_meterLevel[1]),
-                  info.clockState); std::fclose(df); }
+                  telPeak[0], telPeak[1], m_meterLevel[0], m_meterLevel[1], info.clockState); std::fclose(df); }
     }
 
     /* Peak meter for input channels. */
