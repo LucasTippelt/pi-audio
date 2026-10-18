@@ -25,6 +25,10 @@ public:
     /* Set the Engine that receives onBlock() callbacks. */
     void setEngine(Engine* engine) { m_engine = engine; }
 
+    /* B4: Xrun counters for telemetry plumbing. Default to 0 for HALs without xruns. */
+    virtual uint32_t xrunUnderrunCount() const { return 0; }
+    virtual uint32_t xrunOverrunCount()  const { return 0; }
+
 protected:
     Engine* m_engine = nullptr;
 

@@ -13,9 +13,11 @@ struct ParamBlockHeader {
 };
 
 enum StageParamType : uint16_t {
-    STAGE_PARAM_GAIN     = 1,
-    STAGE_PARAM_IIR_COEF = 2,
+    STAGE_PARAM_GAIN      = 1,
+    STAGE_PARAM_IIR_COEF  = 2,
     STAGE_PARAM_CROSSOVER = 3,
+    STAGE_PARAM_DELAY     = 4,
+    STAGE_PARAM_TRIM      = 5,
 };
 
 struct StageParamEntry {

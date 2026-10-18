@@ -1,9 +1,12 @@
 #pragma once
 #include "hal/hal.h"
+#include "dsp_core/drift_controller.h"
+#include "dsp_core/fractional_resampler.h"
 
 /* ------------------------------------------------------------------ */
 /*  SimHal — file/generator-driven, faster-than-RT (A5)               */
 /*  No ALSA dependency. Compiles on any platform including Windows CI. */
+/*  Drift compensation pipeline for B3 testing.                        */
 /* ------------------------------------------------------------------ */
 
 enum SimInputSource {
@@ -25,6 +28,18 @@ public:
     void setInputFile(const char* path);
     void setRunDurationSeconds(double secs);
 
+    /* B4: Xrun counters for telemetry plumbing. */
+    uint32_t xrunUnderrunCount() const override { return m_xrunUnderrun; }
+    uint32_t xrunOverrunCount()  const override { return m_xrunOverrun; }
+
+    /* Test-only injection methods — simulate xrun conditions for B4 testing. */
+    void injectUnderrun();
+    void injectOverrun();
+
+    /* Test-only getters for fade state verification. */
+    float getFadeLevel() const { return m_fadeLevel; }
+    int getFadeStepsRemaining() const { return m_fadeStepsRemaining; }
+
 protected:
     int rtPriority() const override { return 0; }
     bool isTimerPaced() const override { return true; }
@@ -45,4 +60,21 @@ private:
 
     /* Clock state simulation. */
     uint8_t m_clockState         = 1; /* Locked */
+
+    /* Drift compensation pipeline (B3). */
+    static constexpr uint32_t kDriftRingCapacity = 4096;
+    float m_driftRing[kDriftRingCapacity];
+    uint32_t m_ringWritePos = 0;
+    uint32_t m_ringReadPos  = 0;
+
+    DriftController   m_driftCtrl;
+    FractionalResampler m_resampler;
+
+    /* B4: Xrun recovery state for SimHal testing. */
+    uint32_t m_xrunUnderrun = 0;
+    uint32_t m_xrunOverrun  = 0;
+    float m_fadeLevel = 1.0f;
+    int m_fadeStepsRemaining = 0;
+    float m_fadeStartLevel = 1.0f;
+    static constexpr int kFadeRestoreSteps = 8;
 };

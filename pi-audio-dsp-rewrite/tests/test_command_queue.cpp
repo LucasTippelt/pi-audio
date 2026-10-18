@@ -39,25 +39,25 @@ int main() {
     ASSERT(popped.header.seq == 1, "seq matches");
     ASSERT(q.pending() == 0, "pending count is 0 after pop");
 
-    /* Test multiple push/pop. */
-    for (int i = 0; i < 16; ++i) {
+    /* Test multiple push/pop. SPSC ring of capacity N holds N-1 items. */
+    for (int i = 0; i < 15; ++i) {
         CmdLoadParams c{};
         c.header.version = 1;
         c.header.type    = CMD_LOAD_PARAMS;
         c.header.seq     = static_cast<uint32_t>(i + 1);
         ASSERT(q.push(c), "push in loop");
     }
-    ASSERT(q.pending() == 16, "pending is 16");
+    ASSERT(q.pending() == 15, "pending is 15");
 
     CmdLoadParams buf[16]{};
     n = q.pop(buf, 16);
-    ASSERT(n == 16, "pop all returns 16");
-    for (int i = 0; i < 16; ++i) {
+    ASSERT(n == 15, "pop all returns 15");
+    for (int i = 0; i < 15; ++i) {
         ASSERT(buf[i].header.seq == static_cast<uint32_t>(i + 1), "seq order preserved");
     }
 
     /* Test queue full. */
-    for (int i = 0; i < 16; ++i) {
+    for (int i = 0; i < 15; ++i) {
         CmdLoadParams c{};
         c.header.version = 1;
         c.header.type    = CMD_LOAD_PARAMS;

@@ -1,0 +1,37 @@
+#!/bin/bash
+# Mock pi-audio-status adapter
+STATE_FILE="${PI_AUDIO_STATE_FILE:-/run/pi-audio/engine-state.json}"
+STATUS_FILE="/run/pi-audio/status"
+
+connected=false
+message=""
+sampleRate="null"
+bufferSize="null"
+
+if [ -f "$STATUS_FILE" ]; then
+    status_content=$(cat "$STATUS_FILE" 2>/dev/null)
+    if [ "$status_content" = "connected" ] || [ "$status_content" = "running" ]; then
+        connected=true
+    else
+        message="$status_content"
+    fi
+elif [ -f "$STATE_FILE" ]; then
+    if python3 -c "import json; json.load(open('$STATE_FILE'))" 2>/dev/null; then
+        connected=true
+    else
+        message="engine-state.json exists but contains invalid JSON"
+    fi
+else
+    message="Engine not running — engine-state.json not found"
+fi
+
+if [ "$connected" = true ] && [ -f "$STATE_FILE" ]; then
+    sampleRate=$(python3 -c "import json; d=json.load(open('$STATE_FILE')); print(d.get('sampleRate', 'null'))" 2>/dev/null || echo "null")
+    bufferSize=$(python3 -c "import json; d=json.load(open('$STATE_FILE')); print(d.get('BufferSize', 'null'))" 2>/dev/null || echo "null")
+fi
+
+if [ "$connected" = true ]; then
+    printf '{"connected":true,"sampleRate":%s,"BufferSize":%s,"message":""}\n' "$sampleRate" "$bufferSize"
+else
+    printf '{"connected":false,"sampleRate":null,"BufferSize":null,"message":"%s"}\n' "$message"
+fi

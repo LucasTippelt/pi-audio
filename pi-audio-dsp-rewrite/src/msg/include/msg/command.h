@@ -22,6 +22,7 @@ enum CmdType : uint16_t {
     CMD_SCHEDULE        = 4,
     CMD_ENTER_TEST_MODE = 5,
     CMD_LEAVE_TEST_MODE = 6,
+    CMD_SET_TEST_MODE   = 7,
 };
 
 struct CmdSetGain {
@@ -34,11 +35,21 @@ struct CmdSetMute {
     uint8_t muted; /* 0 or 1 */
 };
 
+/* Generic control command for real-time gain/mute routing.
+ * Fits in one cache line, union shares payload space. */
+struct CmdGeneric {
+    CmdHeader header;
+    union {
+        float gain;       /* for CMD_SET_GAIN */
+        uint8_t muted;    /* for CMD_SET_MUTE */
+    };
+};
+
 struct CmdLoadParams {
     CmdHeader header;
     uint32_t paramVersion; /* monotonically increasing */
     uint32_t payloadSize;  /* bytes in payload[] */
-    uint8_t  payload[512]; /* compact binary parameter block */
+    uint8_t  payload[2048];/* compact binary parameter block */
 };
 
 struct CmdTestMode {
@@ -46,9 +57,17 @@ struct CmdTestMode {
     uint8_t target;   /* 0=tweeter, 1=woofer, 2=pgm-l */
 };
 
+/* C1: Set test mode via command queue — atomic update at block boundary. */
+struct CmdSetTestMode {
+    CmdHeader header; /* CMD_SET_TEST_MODE */
+    uint8_t mode;     /* 0=none, 1=tweeter, 2=woofer, 3=pgm-l */
+};
+
 #pragma pack(pop)
 
 static_assert(sizeof(CmdSetGain) <= 64);
 static_assert(sizeof(CmdSetMute) <= 64);
-static_assert(sizeof(CmdLoadParams) <= 576);
+static_assert(sizeof(CmdGeneric) <= 64);
+static_assert(sizeof(CmdLoadParams) <= 2120);
 static_assert(sizeof(CmdTestMode) <= 64);
+static_assert(sizeof(CmdSetTestMode) <= 64);

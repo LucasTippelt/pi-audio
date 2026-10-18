@@ -6,14 +6,14 @@ Rewrite Everything into new Folders pi-audio-dsp-rewrite and pi-audio-web-rewrit
 
 A. Architecture
 
-A1. Split into DSP core, HAL and control plane [P0] [updated]
+A1. Split into DSP core, HAL and control plane [P0] [updated] [tests: test_architecture_separation.cpp]
 
 DSP core: a portable library whose entry point is process(in, out, nframes), plus a command/telemetry interface (A3). It has no OS calls and no file I/O, and its portability rules are in A4.
 HAL: the HAL owns the audio thread and calls Engine::onBlock() once per block with planar float buffers and a BlockInfo (sample index, host time, frames, clock state). The engine does not own the loop. This callback model maps directly onto a DMA/ISR backend later.
 Control plane: config, reload, state files, monitoring and networking. It talks to the core only through the command/telemetry interface.
 Why: the current playback thread owns timing, test-mode file reads, shm reads and network sends. That is the part that is expensive to untangle when the processor changes, and the split makes the DSP unit-testable offline.
 
-A2. Decide the target platform class early [P0]
+A2. Decide the target platform class early [P0] [tests: test_architecture_separation.cpp]
 
 Embedded Linux SoC: stay on ALSA, with a PREEMPT_RT kernel, mlockall, isolated cores and IRQ affinity.
 Bare-metal/RTOS DSP or MCU: no ALSA. Process in the I2S/SAI DMA interrupt, with hardware ASRC for async inputs.
@@ -82,70 +82,70 @@ The HAL reports Internal/Locked/Holdover/Unlocked through BlockInfo. A non-RT he
 The core fades and mutes when the clock isn’t Locked or Internal, and never runs with an unknown clock.
 C. Real-time thread hygiene
 
-C1. Make the playback thread truly I/O-free [P0]
+C1. Make the playback thread truly I/O-free [P0] [tests: test_rt_thread_hygiene.cpp]
 
 Remove the per-cycle read of /dev/shm/pi-audio-test-mode. A background thread watches it and publishes the mode through an atomic (later, as a test-mode command via A3).
 Test-injection shm reads move to a background thread that feeds in-memory SPSC rings.
 Why: mmap reads can page-fault. mlockall plus pre-faulting helps, but “zero file I/O” isn’t currently true.
 
-C2. No network syscalls from the RT thread [P0]
+C2. No network syscalls from the RT thread [P0] [tests: test_rt_thread_hygiene.cpp]
 
 The HTTP and WebSocket servers currently send() from the playback thread. Push to a ring and let a normal-priority thread send, as the relay already does. Check that no mutex is shared with the accept/client threads.
 
-C3. No allocation or deallocation on the RT thread [P1]
+C3. No allocation or deallocation on the RT thread [P1] [tests: test_rt_thread_hygiene.cpp]
 
 This applies to stage swaps and config reloads. Retire old objects through a queue to a background thread. A3 and A4 make this structural.
 
-C4. Rework thread priorities [P1]
+C4. Rework thread priorities [P1] [tests: test_rt_thread_hygiene.cpp]
 
 Use roughly 70–80 instead of SCHED_FIFO “max” (HAL default rtPriority = 75), and consider core pinning.
 Capture and the PGM/mic reader threads are in the signal path, so give them lower-priority SCHED_FIFO.
 
-C5. Nothing calls into the control plane from the RT thread [P1] [new]
+C5. Nothing calls into the control plane from the RT thread [P1] [new] [tests: test_rt_thread_hygiene.cpp]
 
 Clock state travels in BlockInfo, counters sit in Stats/telemetry, and the state-file writer polls them.
 D. Monitoring and networking
 
-D1. Consolidate to one monitoring path [P1] [updated]
+D1. Consolidate to one monitoring path [P1] [updated] [tests: test_monitoring_networking.cpp]
 
 Today there are four: monitor shm, TCP relay to Node, embedded HTTP stream and embedded WebSocket. Pick one and serve it from a separate process.
 In the hybrid product these become Linux-side clients of the DSP, fed by audio returned over the link, not by an embedded server in the audio process.
 Why: it removes the HTTP/WebSocket/SHA-1 code and its attack surface from the process hosting the RT thread.
 E. Shared memory, IPC and config
 
-E1. Define shm lifecycle and ownership [P1]
+E1. Define shm lifecycle and ownership [P1] [tests: test_shm_ipc_config.cpp]
 
 Needing rm /dev/shm/pi-audio-test-* after “write failed” shows the lifecycle is unclear. Add a version/generation field and a handshake, and define who creates, resets and unlinks each object.
 
-E2. Treat shm headers and indices as untrusted [P1]
+E2. Treat shm headers and indices as untrusted [P1] [tests: test_shm_ipc_config.cpp]
 
 Bounds-check read and write positions and validate magic and version before use.
 
-E3. JSON stays on the Linux side [P1] [new]
+E3. JSON stays on the Linux side [P1] [new] [tests: test_shm_ipc_config.cpp]
 
 JSON parsing, validation and coefficient calculation live in the control plane. The core receives only versioned binary parameter blocks (A3).
 The reload trigger and 5 s polling are replaced by “stage parameters, confirm, apply at sample N” over the command interface (I4).
 shm rings are a development-time transport and not part of the product audio path.
 F. DSP quality and protection
 
-F1. Parameter smoothing [P1]
+F1. Parameter smoothing [P1] [tests: test_dsp_quality.cpp]
 
 Ramp volume and mute to avoid clicks and zipper noise. Atomics alone only make the change safe, not inaudible.
 
-F2. Denormal handling [P1]
+F2. Denormal handling [P1] [tests: test_dsp_quality.cpp]
 
 Enable FTZ/DAZ (or add DC offsets) for IIR stages. Check that the target supports an equivalent.
 
-F3. Safety limiting [P1 for test noise, P2 for the product]
+F3. Safety limiting [P1 for test noise, P2 for the product] [tests: test_dsp_quality.cpp]
 
 A limiter on the white-noise test signal now. Full driver protection (excursion and thermal limiting) in the product chain, designed in from the start.
 
-F4. Declared latency per stage [P1] [new]
+F4. Declared latency per stage [P1] [new] [tests: test_dsp_quality.cpp]
 
 Every stage declares a fixed latency, and the total is reported in telemetry. Chain alignment (I1) depends on it.
 
 G. Measurement
 
-G1. Keep timing relationships for sweeps and deconvolution [P1]
+G1. Keep timing relationships for sweeps and deconvolution [P1] [tests: test_measurement_timing.cpp]
 
 Solved by B2 (same device, same clock). Otherwise timestamp every block. Across speakers it requires the shared timebase (I2). Mic data returns over the control/Ethernet path, not AES3.

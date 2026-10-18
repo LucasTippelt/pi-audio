@@ -10,6 +10,7 @@ struct BlockInfo {
     uint64_t hostTimeNs;  /* monotonic clock at block start */
     uint32_t frames;      /* number of frames in this block */
     uint8_t  clockState;  /* 0=Internal, 1=Locked, 2=Holdover, 3=Unlocked */
+    int32_t  delayOffset; /* B2: playback pipeline delay in frames (from snd_pcm_delay) */
 };
 
 static_assert(sizeof(BlockInfo) <= 32);

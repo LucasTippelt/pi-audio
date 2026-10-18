@@ -1,4 +1,5 @@
 #pragma once
+#include <alsa/asoundlib.h>
 #include "hal/hal.h"
 
 /* ------------------------------------------------------------------ */
@@ -16,6 +17,12 @@ public:
     void setCaptureDevice(const char* dev) { m_captureDevice = dev; }
     void setPlaybackDevice(const char* dev) { m_playbackDevice = dev; }
 
+    /* CPU affinity mask for RT thread (no-op in original, kept for engine binary). */
+    void setCoreMask(uint32_t mask) { (void)mask; }
+
+    /* Signal HAL to reopen streams on next cycle (no-op in original, kept for engine binary). */
+    void requestReopen() {}
+
 protected:
     int rtPriority() const override { return 75; }
     bool isTimerPaced() const override;
@@ -24,8 +31,8 @@ private:
     const char* m_captureDevice = "default";
     const char* m_playbackDevice = "default";
 
-    void* m_pcmCapture   = nullptr; /* snd_pcm_t* */
-    void* m_pcmPlayback  = nullptr; /* snd_pcm_t* */
+    snd_pcm_t* m_pcmCapture   = nullptr;
+    snd_pcm_t* m_pcmPlayback  = nullptr;
 
     uint32_t m_sampleRate = 0;
     uint32_t m_bufferSize = 0;

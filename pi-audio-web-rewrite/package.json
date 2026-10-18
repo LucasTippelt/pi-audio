@@ -1,0 +1,27 @@
+{
+  "name": "pi-audio-web-rewrite",
+  "version": "1.0.0",
+  "description": "TypeScript rewrite of pi-audio-web compatible with pi-audio-dsp-rewrite",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "ts-node src/server.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "@types/supertest": "^7.2.1",
+    "@types/ws": "^8.5.0",
+    "supertest": "^7.3.1",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

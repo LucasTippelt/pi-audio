@@ -1,0 +1,29 @@
+#!/bin/bash
+# Mock pi-audio-apply adapter
+CONFIG_DIR="${PI_AUDIO_CONFIG_DIR:-/etc/pi-audio/config}"
+CURRENT_FILE="${CONFIG_DIR}/current.json"
+
+input=$(cat)
+
+if [ -z "$input" ]; then
+    printf '{"ok":false,"error":"No configuration data received on stdin"}\n'
+    exit 1
+fi
+
+if ! echo "$input" | python3 -c "import sys,json; json.load(sys.stdin)" 2>/dev/null; then
+    printf '{"ok":false,"error":"Invalid JSON in configuration"}\n'
+    exit 1
+fi
+
+mkdir -p "$CONFIG_DIR"
+tmp_file=$(mktemp "${CONFIG_DIR}/.current.XXXXXX")
+echo "$input" > "$tmp_file"
+
+if mv "$tmp_file" "$CURRENT_FILE" 2>/dev/null; then
+    printf '{"ok":true,"message":"Configuration applied"}\n'
+    exit 0
+else
+    rm -f "$tmp_file"
+    printf '{"ok":false,"error":"Failed to write configuration file"}\n'
+    exit 1
+fi

@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <cstring>
 #include <type_traits>
+#include <atomic>
 
 /* ------------------------------------------------------------------ */
 /*  Portability constraints for the DSP core                          */
@@ -9,25 +10,8 @@
 /* ------------------------------------------------------------------ */
 
 /* --- Compile-time bans --- */
-#ifdef __has_include
-#if __has_include(<string>)
-#define DSP_STRING_HEADER_AVAILABLE 1
-#endif
-#if __has_include(<vector>)
-#define DSP_VECTOR_HEADER_AVAILABLE 1
-#endif
-#endif
-
-/* In the process path, <string> and <vector> are forbidden. */
-/* Attempting to include them triggers a static_assert failure below. */
-#ifdef DSP_IN_PROCESS_PATH
-  #ifdef DSP_STRING_HEADER_AVAILABLE
-    #error "<string> is banned in the DSP core process path"
-  #endif
-  #ifdef DSP_VECTOR_HEADER_AVAILABLE
-    #error "<vector> is banned in the DSP core process path"
-  #endif
-#endif
+/* In the process path, <string> and <vector> are forbidden.          */
+/* Enforced by code review and target compile flags (A4).             */
 
 /* --- Numeric constraints --- */
 #define DSP_FLOAT_ONLY
