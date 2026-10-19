@@ -13,11 +13,38 @@ No external runtime dependencies — bundled header-only JSON parser in control 
 
 ## Build
 
+### Quick Start (Interactive)
+
+Run `build.sh` for an interactive prompt that lets you choose diagnostic logging with arrow keys and Enter:
+
+```bash
+./build.sh
+```
+
+The script will ask whether to enable diagnostic file logging (`/run/pi-audio/diag.log`). Default is **OFF** (production mode). Use ↑↓ arrows to select, Enter to confirm.
+
+### Manual Build
+
 ```bash
 mkdir build && cd build
-cmake ..
+cmake .. -DPI_AUDIO_DIAG_LOG=OFF
 make -j$(nproc)
 ```
+
+### Diagnostic Logging Option
+
+| Setting | Flag | Effect |
+|---|---|---|
+| **Production** (default) | `-DPI_AUDIO_DIAG_LOG=OFF` | No file I/O in audio path. Lower CPU, no diag.log writes |
+| **Debug** | `-DPI_AUDIO_DIAG_LOG=ON` | Writes diagnostic traces to `/run/pi-audio/diag.log`. Useful for troubleshooting test mode, gain changes, and config reloads |
+
+When enabled, the following components log to `diag.log`:
+- DSP core: per-block peak levels during test mode
+- Gain stage: gain change events with ramp state
+- Engine control: command drain (test mode, gain, mute)
+- Main binary: test control activation/stop, config reload volume/mute
+
+**Note:** Diagnostic logging adds file I/O in the real-time audio path. Keep it disabled for production use to minimize CPU load and avoid blocking the RT thread on disk writes.
 
 ### Libraries
 
@@ -45,6 +72,31 @@ The core is compiled with strict real-time constraints: `-fno-exceptions -fno-rt
 ### Compiler Notes
 
 **g++ 15**: Stricter about `void*` to `snd_pcm_t*` conversions in ALSA HAL. The `hal_alsa` target uses `-fpermissive` flag to allow legacy cast patterns. Header types use `snd_pcm_t*` directly (not `void*`) for type safety.
+
+## Deploy
+
+```bash
+# Build (interactive prompt for diagnostic logging)
+./build.sh
+
+# Deploy binary and restart service
+sudo deploy-pi-audio  # copies build/pi-audio-engine to /usr/local/bin/, restarts systemd service
+```
+
+### Systemd Service
+
+Managed by `pi-audio-engine.service` with drop-in override at `/etc/systemd/system/pi-audio-engine.service.d/override.conf`:
+
+| Setting | Value | Purpose |
+|---|---|---|
+| `RuntimeDirectory` | `pi-audio` | Creates `/run/pi-audio/` for IPC (engine-state.json, test-command) |
+| `RuntimeDirectoryMode` | `0777` | World-writable so web server (www-data) can write speaker test commands |
+| `LimitMEMLOCK` | `67108864` (64MB) | Allows mlockall() for RT thread without EAGAIN on pthread_create |
+| `RestartSec` | `10s` | Delay between restart attempts to avoid rapid crash loops |
+
+### Buffer Size Recommendation
+
+Use `--buffer 512` for ASYNC USB audio interfaces (UR12, etc.). The larger buffer provides USB packet timing slack and reduces XRUN frequency. Default is 128 frames if not specified.
 
 ## Architecture
 
@@ -125,18 +177,18 @@ Full ALSA implementation with real-time optimizations:
 - **Availability-based pacing**: `snd_pcm_avail_update()` checks buffer availability before each read/write instead of blocking I/O. Capture waits for sufficient data; playback skips output when buffer is full (prevents underrun on ASYNC USB endpoints).
 - **Stream activation**: capture warms up with retrying blocking reads (~100ms USB device startup delay); playback activated via silence write during initialization.
 - **RT scheduling**: `SCHED_FIFO` at priority 75 with CPU affinity pinning (`setCoreMask()`)
-- **Memory locking** via `mlockall()` to prevent page faults in RT thread
+- **Memory locking** via `mlockall(MCL_CURRENT)` — locks existing pages only (NOT `MCL_FUTURE` which exhausts the locked memory limit and causes EAGAIN on `pthread_create`)
 - **Pre-allocated I/O buffers** — no heap allocation on RT path
-- **Xrun recovery**: uses `snd_pcm_start()` for XRUN/DRAINING/PREPARED states (not `snd_pcm_recover()` which returns EBUSY on ASYNC USB devices). Fade level (`m_fadeLevel`) is NOT reset during xrun recovery — it stays at 1.0f and only ramps down when explicitly muted. This fixes a critical bug where ~374 xruns/s kept fade near zero permanently, causing complete muting.
+- **Xrun recovery**: uses `snd_pcm_prepare()` + `snd_pcm_start()` sequence for XRUN/DRAINING/PREPARED states (not `snd_pcm_recover()` which returns EBUSY on ASYNC USB devices). Bare `snd_pcm_start()` alone doesn't fully reinitialize the stream after persistent XRUN, causing the engine to loop without producing telemetry. Capture recovery falls through to process silence (keeping telemetry flowing) instead of continuing the loop. Fade level (`m_fadeLevel`) is NOT reset during xrun recovery — it stays at 1.0f and only ramps down when explicitly muted. This fixes a critical bug where ~374 xruns/s kept fade near zero permanently, causing complete muting.
 - **Timer pacing safety-net**: auto-detected via `snd_pcm_type() == SND_PCM_TYPE_NULL`; switches to timer pacing if `writei` returns in under half a period (catches `plug:`-wrapped null devices)
 
 #### ASYNC USB Device Notes
 
 USB audio interfaces with ASYNC endpoints (no implicit feedback) require special handling:
 - **No stream linking**: `snd_pcm_link()` before hw_params fails with EBADF on plughw; after hw_params succeeds but causes continuous capture XRUN
-- **Larger buffers**: 4× buffer size (e.g., 2048 frames for 512-period) provides USB packet timing slack
+- **Larger buffers**: Use `--buffer 512` or higher for USB packet timing slack (default 128 is too small for ASYNC devices)
 - **Non-blocking I/O**: Blocking readi/writei can hang indefinitely on ASYNC endpoints when stream enters DRAINING state
-- **snd_pcm_start() recovery**: `snd_pcm_recover()` returns EBUSY (-16) and cannot handle DRAINING state; use explicit `snd_pcm_start()` instead
+- **snd_pcm_prepare() + snd_pcm_start() recovery**: `snd_pcm_recover()` returns EBUSY (-16) and cannot handle DRAINING state; use explicit prepare+start sequence instead of bare start
 
 ## DSP Core
 

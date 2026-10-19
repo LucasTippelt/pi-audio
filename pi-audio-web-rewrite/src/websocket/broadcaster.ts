@@ -97,7 +97,9 @@ export class Broadcaster {
       stats.wsMsgs = 0;
       stats.skipped = 0;
     }
-    console.log(line);
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(line);
+    }
   }
 
   /** Stop broadcasting */

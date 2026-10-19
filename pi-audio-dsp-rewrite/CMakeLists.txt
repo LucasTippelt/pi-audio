@@ -5,6 +5,16 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ------------------------------------------------------------------ #
+#  Options                                                             #
+# ------------------------------------------------------------------ #
+option(PI_AUDIO_DIAG_LOG "Enable diagnostic file logging to /run/pi-audio/diag.log" OFF)
+if(PI_AUDIO_DIAG_LOG)
+    message(STATUS "Diagnostic logging: ENABLED (writes to /run/pi-audio/diag.log)")
+else()
+    message(STATUS "Diagnostic logging: DISABLED (production mode, no file I/O in audio path)")
+endif()
+
+# ------------------------------------------------------------------ #
 #  Common include paths                                               #
 # ------------------------------------------------------------------
 set(REWRITE_CORE_INC   ${CMAKE_SOURCE_DIR}/src/core/include)
@@ -39,6 +49,11 @@ target_link_libraries(dsp_core PRIVATE msg_lib)
 target_compile_options(dsp_core PRIVATE -fno-exceptions -fno-rtti -ffast-math -Wdouble-promotion -Werror=return-type)
 set_target_properties(dsp_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+# Diagnostic logging control.
+if(PI_AUDIO_DIAG_LOG)
+    target_compile_definitions(dsp_core PRIVATE PI_AUDIO_DIAG_LOG)
+endif()
+
 # ------------------------------------------------------------------ #
 #  SimHal — no ALSA dependency, compiles on any platform             #
 # ------------------------------------------------------------------
@@ -49,6 +64,11 @@ add_library(hal_sim STATIC
 target_include_directories(hal_sim PUBLIC ${REWRITE_HAL_INC} ${REWRITE_CORE_INC} ${REWRITE_CORE_SRC} ${REWRITE_MSG_INC})
 target_link_libraries(hal_sim PRIVATE dsp_core msg_lib)
 target_compile_options(hal_sim PRIVATE -fno-exceptions -fno-rtti)
+
+# Diagnostic logging control.
+if(PI_AUDIO_DIAG_LOG)
+    target_compile_definitions(hal_sim PRIVATE PI_AUDIO_DIAG_LOG)
+endif()
 
 # ------------------------------------------------------------------ #
 #  AlsaHal — Linux-only, links ALSA                                  #
@@ -65,6 +85,11 @@ if(UNIX AND NOT APPLE)
     target_link_libraries(hal_alsa PRIVATE dsp_core msg_lib ${ALSA_LIBRARIES} rt)
     target_compile_options(hal_alsa PRIVATE -fno-exceptions -fno-rtti -fpermissive)
     target_include_directories(hal_alsa PRIVATE ${ALSA_INCLUDE_DIRS})
+
+    # Diagnostic logging control.
+    if(PI_AUDIO_DIAG_LOG)
+        target_compile_definitions(hal_alsa PRIVATE PI_AUDIO_DIAG_LOG)
+    endif()
 endif()
 
 # ------------------------------------------------------------------ #
@@ -86,6 +111,11 @@ target_link_libraries(pi-audio-engine PRIVATE control_plane hal_sim msg_lib pthr
 
 if(UNIX AND NOT APPLE)
     target_link_libraries(pi-audio-engine PRIVATE hal_alsa)
+endif()
+
+# Diagnostic logging control.
+if(PI_AUDIO_DIAG_LOG)
+    target_compile_definitions(pi-audio-engine PRIVATE PI_AUDIO_DIAG_LOG)
 endif()
 
 # ------------------------------------------------------------------ #

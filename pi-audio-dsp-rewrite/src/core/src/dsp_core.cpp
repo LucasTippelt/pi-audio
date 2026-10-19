@@ -159,9 +159,11 @@ void DspCore::process(float* const in[], uint32_t numInCh,
                 if (v > postPeak[ch]) postPeak[ch] = v;
             }
         }
+#ifdef PI_AUDIO_DIAG_LOG
         { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
           if (df) { std::fprintf(df, "[dsp] testMode=%u pre=[%.4f %.4f] post=[%.4f %.4f]\n",
                     m_testMode, prePeak[0], prePeak[1], postPeak[0], postPeak[1]); std::fclose(df); } }
+#endif
     }
 
     /* B6: React to clock-state changes. */
@@ -220,12 +222,14 @@ void DspCore::process(float* const in[], uint32_t numInCh,
         m_telemetryCache.outputLevelDb[ch] = db;
     }
 
+#ifdef PI_AUDIO_DIAG_LOG
     /* Diagnostic: log telemetry meter peaks and persistent levels during test mode. */
     if (m_testMode != 0 && diagTime) {
         FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
         if (df) { std::fprintf(df, "[tel] telPeak=[%.6f %.6f] meterLevel=[%.6f %.6f] clockState=%u\n",
                   telPeak[0], telPeak[1], m_meterLevel[0], m_meterLevel[1], info.clockState); std::fclose(df); }
     }
+#endif
 
     /* Peak meter for input channels. */
     uint32_t meterCh = (numInCh < 8) ? numInCh : 8;

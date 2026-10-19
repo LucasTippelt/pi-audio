@@ -115,6 +115,23 @@ All POST actions routed through `/api/:action`:
 | `preset-delete-all` | Delete all presets except Default |
 | `restore-defaults` | Reset to factory DEFAULT_STATE |
 
+### Debug Page
+
+`GET /debug` — Diagnostic page with auto-refresh (5s interval) showing:
+
+- **DSP Connection Status**: Connected state, sample rate, buffer size from engine-state.json
+- **Services**: Active/inactive status of pi-audio-engine and pi-audio-web systemd services
+- **Binaries**: Existence and executable permissions of engine binary
+- **Output Levels (Live)**: Real-time L/R level meters from engine telemetry
+- **Engine Telemetry**: Sequence number, XRUN counters, clock state, latency frames, sample index
+- **Engine State vs Config**: Side-by-side comparison of config file values vs running engine state with match indicators
+- **Current Configuration**: Full current.json contents rendered as table
+- **Raw JSON Panels**: Raw engine-state.json and current.json side by side
+- **ALSA**: Sound card list and mixer controls from `aplay -l` and `amixer scontrols`
+- **Presets**: File listing with sizes and modification times
+- **File Permissions**: Writability check for key config paths
+- **Build Versions**: Web server version, engine version, version match status, Node.js version
+
 ## WebSocket Audio Streaming
 
 Subscribe to real-time audio channels via WebSocket:
@@ -312,11 +329,13 @@ Deploy script pipeline:
 
 ### systemd Service
 
-`deploy/pi-audio-web.service`:
-- Runs as `www-data`, port 8767
+Installed at `/etc/systemd/system/pi-audio-web.service`:
+- Runs as `www-data`, port 80 (via `CAP_NET_BIND_SERVICE`)
 - Security: `NoNewPrivileges`, `ProtectSystem=strict`, `PrivateTmp`
-- `ReadWritePaths`: `/var/www/pi-audio /dev/shm /run/pi-audio`
-- Depends on `pi-audio-dsp.service`
+- `ReadWritePaths`: `/var/www/pi-audio /etc/pi-audio /dev/shm /run/pi-audio`
+- Depends on `pi-audio-engine.service`
+
+**Important**: After any service file change, run `sudo systemctl daemon-reload && sudo systemctl restart pi-audio-web`. The `ReadWritePaths` sandbox mounts only take effect at service start — an old process keeps stale read-only mount namespaces.
 
 ### IPC Permissions
 
@@ -326,7 +345,12 @@ The web server communicates with the DSP engine via file-based IPC in `/run/pi-a
 2. **www-data user** must be in the `audio` group: `sudo usermod -aG audio www-data`
 3. After adding www-data to audio group, restart the web server so it picks up new group membership
 
-Without these permissions, speaker tests return `"Speaker test for X requires a running engine"` even when the engine is active.
+After any service file change (dependency updates, ReadWritePaths changes), run:
+```bash
+sudo systemctl daemon-reload && sudo systemctl restart pi-audio-engine pi-audio-web
+```
+
+Without these permissions, speaker tests return `"Speaker test for X requires a running engine"` even when the engine is active. The `ProtectSystem=strict` sandbox makes `/run/` read-only by default; `ReadWritePaths=/run/pi-audio` creates a writable bind mount but only at service start time.
 
 ### Environment Variables
 

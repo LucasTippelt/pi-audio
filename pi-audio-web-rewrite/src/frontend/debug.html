@@ -319,22 +319,25 @@ async function fetchData() {
 
 // Auto-refresh with progress bar
 (function() {
-  let start = Date.now();
+  let cycleStart = Date.now();
   const bar = document.getElementById('refresh-bar');
   const status = document.getElementById('refresh-status');
+
   function tick() {
-    const elapsed = Date.now() - start;
+    const elapsed = Date.now() - cycleStart;
     const pct = Math.min(100, (elapsed / REFRESH_INTERVAL) * 100);
     bar.style.width = pct + '%';
     const remaining = Math.max(0, Math.ceil((REFRESH_INTERVAL - elapsed) / 1000));
     status.textContent = `Refresh in ${remaining}s`;
+
     if (elapsed >= REFRESH_INTERVAL) {
-      start = Date.now();
+      cycleStart = Date.now();
       fetchData();
-    } else {
-      requestAnimationFrame(tick);
     }
+    // Always schedule next frame — keeps progress bar animating continuously.
+    requestAnimationFrame(tick);
   }
+
   fetchData();
   requestAnimationFrame(tick);
 })();

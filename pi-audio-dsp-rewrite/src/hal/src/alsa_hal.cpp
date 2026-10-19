@@ -37,8 +37,12 @@ bool AlsaHal::open(uint32_t sampleRate, uint32_t bufferSize,
         /* Non-fatal: continue without RT scheduling. */
     }
 
-    /* Lock memory to prevent page faults in RT thread. */
-    mlockall(MCL_CURRENT | MCL_FUTURE);
+    /* Lock current memory pages only — avoid MCL_FUTURE which can exhaust
+     * the locked-memory limit and cause pthread_create to fail with EAGAIN
+     * when new thread stacks need to be allocated. */
+    if (mlockall(MCL_CURRENT) != 0) {
+        /* Non-fatal: continue without memory locking. */
+    }
 
     return true;
 }
@@ -92,15 +96,17 @@ void AlsaHal::run() {
          * speaker tests and DSP processing continue uninterrupted. */
         snd_pcm_sframes_t availCap = snd_pcm_avail_update(m_pcmCapture);
         if (availCap < 0) {
-            /* Error state — try to recover. */
+            /* Error state — try to recover with prepare+start sequence. */
             int err = snd_pcm_state(m_pcmCapture);
             if (err == SND_PCM_STATE_XRUN || err == SND_PCM_STATE_DRAINING || err == SND_PCM_STATE_PREPARED) {
                 m_xrunOverrun++;
+                snd_pcm_prepare(m_pcmCapture);
                 snd_pcm_start(m_pcmCapture);
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                /* Fall through to process silence — keeps telemetry flowing. */
+            } else {
+                break;
             }
-            break;
         }
 
         uint32_t capFrames = 0;
@@ -111,10 +117,12 @@ void AlsaHal::run() {
                 int err = snd_pcm_state(m_pcmCapture);
                 if (err == SND_PCM_STATE_XRUN || err == SND_PCM_STATE_DRAINING || err == SND_PCM_STATE_PREPARED) {
                     m_xrunOverrun++;
+                    snd_pcm_prepare(m_pcmCapture);
                     snd_pcm_start(m_pcmCapture);
-                    continue;
+                    /* Fall through to process silence. */
+                } else {
+                    break;
                 }
-                break;
             }
             capFrames = static_cast<uint32_t>(r);
 
@@ -182,10 +190,11 @@ void AlsaHal::run() {
         /* Check playback availability before writing. */
         snd_pcm_sframes_t availPlay = snd_pcm_avail_update(m_pcmPlayback);
         if (availPlay < 0) {
-            /* Error state — try to recover. */
+            /* Error state — try to recover with prepare+start. */
             int err = snd_pcm_state(m_pcmPlayback);
             if (err == SND_PCM_STATE_XRUN || err == SND_PCM_STATE_DRAINING || err == SND_PCM_STATE_PREPARED) {
                 m_xrunUnderrun++;
+                snd_pcm_prepare(m_pcmPlayback);
                 snd_pcm_start(m_pcmPlayback);
                 sampleIndex += static_cast<uint64_t>(capFrames);
                 continue;
@@ -204,6 +213,7 @@ void AlsaHal::run() {
             int err = snd_pcm_state(m_pcmPlayback);
             if (err == SND_PCM_STATE_XRUN || err == SND_PCM_STATE_DRAINING || err == SND_PCM_STATE_PREPARED) {
                 m_xrunUnderrun++;
+                snd_pcm_prepare(m_pcmPlayback);
                 snd_pcm_start(m_pcmPlayback);
                 continue;
             }

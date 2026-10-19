@@ -179,7 +179,7 @@ int main(int argc, char* argv[]) {
 
     /* --- Create /run/pi-audio/ directory and sentinel for status adapter. --- */
     {
-        mkdir("/run/pi-audio", 0755);
+        mkdir("/run/pi-audio", 0777);
         FILE* sentinel = std::fopen("/run/pi-audio/status", "w");
         if (sentinel) {
             std::fprintf(sentinel, "running\n");
@@ -283,9 +283,11 @@ int main(int argc, char* argv[]) {
             startCmd.mode = static_cast<uint8_t>(mode);
             testCmdQueue.push(startCmd);
 
+#ifdef PI_AUDIO_DIAG_LOG
             std::printf("[engine] Test mode %d started, duration %.1fs\n", mode, durationSec);
             { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
               if (df) { std::fprintf(df, "[test-ctrl] mode=%d duration=%.1fs\n", mode, durationSec); std::fclose(df); } }
+#endif
 
             /* Sleep for the requested duration. */
             {
@@ -312,7 +314,9 @@ int main(int argc, char* argv[]) {
             stopCmd.mode = 0;
             testCmdQueue.push(stopCmd);
 
+#ifdef PI_AUDIO_DIAG_LOG
             std::printf("[engine] Test mode stopped\n");
+#endif
         }
     });
 
@@ -371,6 +375,7 @@ int main(int argc, char* argv[]) {
                             bool gotVolume = ConfigLoader::extractVolumeGain(buf, static_cast<size_t>(sz), &newGain);
                             bool gotMuted = ConfigLoader::extractMuted(buf, static_cast<size_t>(sz), &newMuted);
 
+#ifdef PI_AUDIO_DIAG_LOG
                             /* Diagnostic log. */
                             {
                                 FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
@@ -380,6 +385,7 @@ int main(int argc, char* argv[]) {
                                     std::fclose(df);
                                 }
                             }
+#endif
 
                             if (gotVolume && (!hadVolume || newGain != lastGain)) {
                                 CmdGeneric cmd;

@@ -18,26 +18,56 @@ const TEST_MODE_MAP: Record<string, number> = {
 
 const kTestCommandPath = '/run/pi-audio/test-command';
 const kTestStopPath = '/run/pi-audio/test-stop';
+const kEngineStatePath = '/run/pi-audio/engine-state.json';
 
-/* Write IPC command file for engine test control thread. */
-async function writeTestCommand(mode: number, durationSec: number): Promise<boolean> {
+/* Check if engine is running by reading its state file. */
+async function isEngineRunning(): Promise<boolean> {
     try {
-        const tmp = kTestCommandPath + '.tmp';
-        await fs.promises.writeFile(tmp, JSON.stringify({ mode, duration: durationSec }));
-        await fs.promises.rename(tmp, kTestCommandPath);
-        return true;
+        const data = await fs.promises.readFile(kEngineStatePath, 'utf8');
+        const state = JSON.parse(data);
+        return state.connected === true;
     } catch {
         return false;
     }
 }
 
+/* Result type for IPC write operations. */
+type IpcWriteResult = { ok: true } | { ok: false; reason: 'permission' | 'engine-offline' | 'unknown' };
+
+/* Write IPC command file for engine test control thread. */
+async function writeTestCommand(mode: number, durationSec: number): Promise<IpcWriteResult> {
+    try {
+        const tmp = kTestCommandPath + '.tmp';
+        await fs.promises.writeFile(tmp, JSON.stringify({ mode, duration: durationSec }));
+        await fs.promises.rename(tmp, kTestCommandPath);
+        return { ok: true };
+    } catch (e: any) {
+        if (e?.code === 'EACCES' || e?.code === 'EPERM') {
+            return { ok: false, reason: 'permission' };
+        }
+        // Check if engine is actually running
+        const running = await isEngineRunning();
+        if (!running) {
+            return { ok: false, reason: 'engine-offline' };
+        }
+        return { ok: false, reason: 'unknown' };
+    }
+}
+
 /* Signal engine to stop current test early. */
-async function writeTestStop(): Promise<boolean> {
+async function writeTestStop(): Promise<IpcWriteResult> {
     try {
         await fs.promises.writeFile(kTestStopPath, '1');
-        return true;
-    } catch {
-        return false;
+        return { ok: true };
+    } catch (e: any) {
+        if (e?.code === 'EACCES' || e?.code === 'EPERM') {
+            return { ok: false, reason: 'permission' };
+        }
+        const running = await isEngineRunning();
+        if (!running) {
+            return { ok: false, reason: 'engine-offline' };
+        }
+        return { ok: false, reason: 'unknown' };
     }
 }
 
@@ -653,66 +683,91 @@ export function handleRestoreDefaults(req: Request, res: Response): void {
 }
 
 export async function handleTestSpeaker(req: Request, res: Response): Promise<void> {
-  try {
-    const body = req.body as Record<string, unknown>;
-    const driverName = String(body.driver || '');
+   try {
+     const body = req.body as Record<string, unknown>;
+     const driverName = String(body.driver || '');
 
-    if (!TEST_SPEAKER_DRIVERS.includes(driverName)) {
-      res.status(422).json({ error: 'Invalid speaker test target.' });
-      return;
-    }
+     if (!TEST_SPEAKER_DRIVERS.includes(driverName)) {
+       res.status(422).json({ error: 'Invalid speaker test target.' });
+       return;
+     }
 
-    const duration = body.duration ? Number(body.duration) : 3;
-    if (isNaN(duration) || duration < 0.5) {
-      res.status(422).json({ error: 'Duration must be at least 0.5 seconds.' });
-      return;
-    }
+     const duration = body.duration ? Number(body.duration) : 3;
+     if (isNaN(duration) || duration < 0.5) {
+       res.status(422).json({ error: 'Duration must be at least 0.5 seconds.' });
+       return;
+     }
 
-    const mode = TEST_MODE_MAP[driverName];
-    if (mode !== undefined) {
-      const ipcOk = await writeTestCommand(mode, duration);
-      if (ipcOk) {
-        res.json({ tested: driverName, mode: 'ipc', duration });
-        return;
-      }
-    }
+     const mode = TEST_MODE_MAP[driverName];
+     if (mode !== undefined) {
+       const result = await writeTestCommand(mode, duration);
+       if (result.ok) {
+         res.json({ tested: driverName, mode: 'ipc', duration });
+         return;
+       }
+       // Provide specific error based on failure reason
+       if (result.reason === 'permission') {
+         res.status(502).json({ error: `Speaker test failed: web server missing write permission to /run/pi-audio/. Restart pi-audio-web service.` });
+         return;
+       }
+       if (result.reason === 'engine-offline') {
+         res.status(502).json({ error: `Speaker test for ${driverName} requires a running engine.` });
+         return;
+       }
+     }
 
-    res.status(502).json({ error: `Speaker test for ${driverName} requires a running engine.` });
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
-  }
+     res.status(502).json({ error: `Speaker test failed: unable to communicate with audio engine.` });
+   } catch (e: any) {
+     res.status(500).json({ error: e.message });
+   }
 }
 
 export async function handleStopTestSpeaker(_req: Request, res: Response): Promise<void> {
-  try {
-    const ok = await writeTestStop();
-    if (!ok) {
-      res.status(502).json({ error: 'Failed to send stop command.' });
-      return;
-    }
-    res.json({ stopped: true });
-  } catch (e: any) {
+   try {
+     const result = await writeTestStop();
+     if (!result.ok) {
+       if (result.reason === 'permission') {
+         res.status(502).json({ error: 'Failed to stop test: web server missing write permission to /run/pi-audio/. Restart pi-audio-web service.' });
+         return;
+       }
+       if (result.reason === 'engine-offline') {
+         res.status(502).json({ error: 'Failed to stop test: audio engine is not running.' });
+         return;
+       }
+       res.status(502).json({ error: 'Failed to send stop command.' });
+       return;
+     }
+     res.json({ stopped: true });
+   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
 }
 
 export async function handleTestPgm(req: Request, res: Response): Promise<void> {
-  try {
-    const body = req.body as Record<string, unknown>;
-    const duration = body.duration ? Number(body.duration) : 3;
-    if (isNaN(duration) || duration < 0.5) {
-      res.status(422).json({ error: 'Duration must be at least 0.5 seconds.' });
-      return;
-    }
+   try {
+     const body = req.body as Record<string, unknown>;
+     const duration = body.duration ? Number(body.duration) : 3;
+     if (isNaN(duration) || duration < 0.5) {
+       res.status(422).json({ error: 'Duration must be at least 0.5 seconds.' });
+       return;
+     }
 
-    const ipcOk = await writeTestCommand(3, duration);
-    if (ipcOk) {
-      res.json({ tested: 'PGM_L', mode: 'ipc', duration });
-      return;
-    }
+     const result = await writeTestCommand(3, duration);
+     if (result.ok) {
+       res.json({ tested: 'PGM_L', mode: 'ipc', duration });
+       return;
+     }
 
-    res.status(502).json({ error: 'PGM test requires a running engine.' });
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
-  }
+     if (result.reason === 'permission') {
+       res.status(502).json({ error: 'PGM test failed: web server missing write permission to /run/pi-audio/. Restart pi-audio-web service.' });
+       return;
+     }
+     if (result.reason === 'engine-offline') {
+       res.status(502).json({ error: 'PGM test requires a running engine.' });
+       return;
+     }
+     res.status(502).json({ error: 'PGM test failed: unable to communicate with audio engine.' });
+   } catch (e: any) {
+     res.status(500).json({ error: e.message });
+   }
 }

@@ -50,8 +50,10 @@ void Engine::drainCommands() {
         for (size_t i = 0; i < n; ++i) {
             if (cmds[i].header.type == CMD_SET_TEST_MODE) {
                 m_testMode.store(cmds[i].mode, std::memory_order_release);
-                FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
-                if (df) { std::fprintf(df, "[ctrl] CMD_SET_TEST_MODE mode=%u\n", cmds[i].mode); std::fclose(df); }
+#ifdef PI_AUDIO_DIAG_LOG
+                { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+                  if (df) { std::fprintf(df, "[ctrl] CMD_SET_TEST_MODE mode=%u\n", cmds[i].mode); std::fclose(df); } }
+#endif
             }
         }
     }
@@ -67,14 +69,18 @@ void Engine::drainCommands() {
                 case CMD_SET_GAIN:
                     if (m_tweeterGain) m_tweeterGain->setGain(cmds[i].gain);
                     if (m_wooferGain)  m_wooferGain->setGain(cmds[i].gain);
+#ifdef PI_AUDIO_DIAG_LOG
                     { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
                       if (df) { std::fprintf(df, "[ctrl] CMD_SET_GAIN gain=%.4f\n", cmds[i].gain); std::fclose(df); } }
+#endif
                     break;
                 case CMD_SET_MUTE:
                     if (m_tweeterGain) m_tweeterGain->setMute(cmds[i].muted != 0);
                     if (m_wooferGain)  m_wooferGain->setMute(cmds[i].muted != 0);
+#ifdef PI_AUDIO_DIAG_LOG
                     { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
                       if (df) { std::fprintf(df, "[ctrl] CMD_SET_MUTE muted=%u\n", cmds[i].muted); std::fclose(df); } }
+#endif
                     break;
                 default:
                     break;

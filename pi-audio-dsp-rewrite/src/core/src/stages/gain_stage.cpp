@@ -14,9 +14,11 @@ void GainStage::setGain(float gain) {
     if (gain > 1.f) gain = 1.f;
     m_targetGain = gain;
     startRamp(m_currentGain, gain);
+#ifdef PI_AUDIO_DIAG_LOG
     { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
       if (df) { std::fprintf(df, "[gain] setGain input=%.4f target=%.4f current=%.4f rampEnd=%.4f\n",
                 gain, m_targetGain, m_currentGain, m_rampEnd); std::fclose(df); } }
+#endif
 }
 
 void GainStage::setMute(bool muted) {

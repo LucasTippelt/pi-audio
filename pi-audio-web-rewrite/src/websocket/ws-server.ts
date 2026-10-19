@@ -69,7 +69,9 @@ export class WSServer {
       this.clients.set(idx, new Set());
     }
 
-    console.log(`pi-audio-ws-server v${versionInfo.version}`);
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`pi-audio-ws-server v${versionInfo.version}`);
+    }
 
     this.wss.on('connection', (ws, req) => this.handleConnection(ws, req));
   }
@@ -80,7 +82,9 @@ export class WSServer {
     const chIdx = CHANNELS[ch] != null ? CHANNELS[ch] : 0;
     const peer = `${req.socket.remoteAddress}:${req.socket.remotePort}`;
 
-    console.log(`ws-connect ${peer} ch=${ch} idx=${chIdx}`);
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`ws-connect ${peer} ch=${ch} idx=${chIdx}`);
+    }
 
     // Get engine settings from engine-state.json instead of HTTP fetch
     let settings: { sampleRate: number; bufferSize: number } | null = null;
@@ -94,7 +98,9 @@ export class WSServer {
         };
       }
     } catch (e: any) {
-      console.log(`[CONFIG] engine state unavailable: ${e.message}`);
+      if (process.env.NODE_ENV !== 'production') {
+        console.log(`[CONFIG] engine state unavailable: ${e.message}`);
+      }
     }
 
     if (!settings && ws.readyState === WebSocket.OPEN) {

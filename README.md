@@ -95,6 +95,46 @@ The architecture is designed so the DSP core can run on three classes of target 
 3. **Wire command transport** — Serialize command queue structs over chosen link (SPI, UART, etc.). Add checksum. Linux side sends binary parameter blocks; target applies at block boundaries via StageSet swap.
 4. **Validate cycle budget** — Log per-stage timing against the target's budget. The Pi build is a faithful stand-in for algorithm validation but not cycle-count accuracy.
 
+## Deployment
+
+### Systemd Services
+
+Two services manage the system:
+
+| Service | Description | Key Settings |
+|---|---|---|
+| `pi-audio-engine` | DSP engine (C++) | `RuntimeDirectory=pi-audio`, `LimitMEMLOCK=64M`, buffer 512 for USB devices |
+| `pi-audio-web` | Web server (Node.js) | Runs as `www-data`, port 80, `ProtectSystem=strict` with `ReadWritePaths` |
+
+Engine override at `/etc/systemd/system/pi-audio-engine.service.d/override.conf`:
+```ini
+[Service]
+ExecStart=
+ExecStart=/usr/local/bin/pi-audio-engine /etc/pi-audio/config/current.json /var/log/pi-audio/engine.log --rate 48000 --buffer 512 --capture-dev hw:CARD=UR12,DEV=0 --playback-dev hw:CARD=UR12,DEV=0
+RestartSec=10
+LimitMEMLOCK=67108864
+```
+
+### Rebuild and Deploy
+
+```bash
+# Engine (C++)
+cd pi-audio-dsp-rewrite/build && cmake .. && make -j$(nproc)
+sudo deploy-pi-audio  # copies binary + restarts engine service
+
+# Web server (TypeScript)
+cd pi-audio-web-rewrite && npx tsc
+sudo systemctl restart pi-audio-web
+```
+
+### After Service File Changes
+
+Any change to `.service` files or drop-in overrides requires:
+```bash
+sudo systemctl daemon-reload && sudo systemctl restart pi-audio-engine pi-audio-web
+```
+Both services must be restarted — `ReadWritePaths` sandbox mounts only take effect at service start.
+
 ## Troubleshooting
 
 ### Muted output despite engine running
@@ -102,13 +142,23 @@ The architecture is designed so the DSP core can run on three classes of target 
 If `engine-state.json` shows zero xruns but output levels are near silence (-160 dB or lower):
 
 - **Check fade level**: The DSP core uses a fade multiplier (`m_fadeLevel`) that starts at 1.0f. If xrun recovery resets this to 0.0f and xruns occur frequently (~374/s on ASYNC USB), the output stays muted. Fix: ensure `recoverUnderrun()` does NOT reset `m_fadeLevel = 0.0f`.
-- **Check ALSA device**: Use `hw:1,0` (native hardware) instead of `plughw:CARD=UR12,DEV=0` for ASYNC USB devices. The plughw wrapper adds format conversion that conflicts with stream linking.
+- **Check ALSA device**: Use `hw:CARD=UR12,DEV=0` (native hardware) instead of `plughw:` for ASYNC USB devices. The plughw wrapper adds format conversion that conflicts with stream linking.
 
 ### Speaker tests fail with "requires a running engine"
 
-- Ensure `/run/pi-audio/` has mode 0777 (set via `RuntimeDirectoryMode` in systemd service)
+- Ensure `/run/pi-audio/` has mode 0777 (set via `RuntimeDirectoryMode=0777` in systemd service)
 - Ensure `www-data` is in the `audio` group: `sudo usermod -aG audio www-data`
-- Restart web server after group change so it picks up new credentials
+- **Restart web server** after any permission or service file change so it picks up new sandbox mounts (`ReadWritePaths`)
+
+### Engine crashes with "Resource temporarily unavailable" on thread creation
+
+- **Cause**: `mlockall(MCL_CURRENT | MCL_FUTURE)` exhausts the locked memory limit (default 64MB). When `pthread_create` allocates thread stacks, the kernel cannot lock new pages and returns EAGAIN.
+- **Fix**: Engine uses `mlockall(MCL_CURRENT)` only — locks existing pages but allows future allocations without locking. Set `LimitMEMLOCK=67108864` (64MB) in systemd service for safety margin.
+
+### XRUN recovery loop — engine stuck, no telemetry produced
+
+- **Cause**: Bare `snd_pcm_start()` after XRUN doesn't fully reinitialize the stream on ASYNC USB devices. The `continue` statement skips `onBlock()`, so no telemetry is ever written and `engine-state.json` stays stale.
+- **Fix**: Recovery uses `snd_pcm_prepare()` + `snd_pcm_start()` sequence for proper stream reinitialization. Capture recovery falls through to process silence (keeping telemetry flowing) instead of continuing the loop.
 
 ### Engine fails to open HAL on plughw device
 
@@ -134,6 +184,8 @@ pi-audio/
 │   │   ├── adapters/           # External binary adapters (status, apply, test)
 │   │   └── frontend/           # Vanilla JS SPA
 │   └── tests/                  # Vitest test suite
-├── pi-audio-dsp/               # Legacy DSP engine (superseded by rewrite)
-└── pi-audio-web/               # Legacy web interface (superseded by rewrite)
+├── legacy/                     # Superseded code (kept for reference)
+│   ├── pi-audio-dsp-legacy/    # Old DSP engine
+│   └── pi-audio-web-legacy/    # Old PHP/Apache web interface
+└── VERSION                     # Shared version string
 ```
