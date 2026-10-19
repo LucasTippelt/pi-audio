@@ -1,6 +1,8 @@
 # Monorepo root
 pi-audio-dsp/build/
+pi-audio-dsp-rewrite/build/
 pi-audio-dsp/*.log
+pi-audio-web/node_modules/
 pi-audio-web/assets/*.map
 libaudio_core.a
 *.swp
@@ -8,3 +10,24 @@ libaudio_core.a
 *~
 continue.md
 .vscode/
+.kilo/plans/1792097088191-phase2-clocking-sync.md
+.kilo/
+pi-audio-web-rewrite/node_modules/
+RewriteInstructions.md
+readme.backup
+node_modules/
+
+# Build outputs
+pi-audio-web-rewrite/dist/
+*.o
+*.so
+*.a
+*.pyc
+__pycache__/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs (repo-wide, not just pi-audio-dsp/)
+*.log

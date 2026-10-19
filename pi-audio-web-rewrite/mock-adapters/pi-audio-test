@@ -1,0 +1,41 @@
+#!/bin/bash
+# Mock pi-audio-test adapter
+# Simulates speaker test by writing test signal to appropriate SHM ring
+# Usage: pi-audio-test <driver_name>
+
+DRIVER_NAME="${1:-}"
+
+if [ -z "$DRIVER_NAME" ]; then
+    echo '{"ok":false,"error":"Driver name required"}'
+    exit 1
+fi
+
+# Map driver names to SHM channel names
+case "$DRIVER_NAME" in
+    Tweeter)   shm_name="tweeter" ;;
+    Woofer)    shm_name="woofer" ;;
+    PGM_L)     shm_name="pgm-l" ;;
+    PGM_R)     shm_name="pgm-r" ;;
+    Mic_1)     shm_name="mic-1" ;;
+    Mic_2)     shm_name="mic-2" ;;
+    Mic_3)     shm_name="mic-3" ;;
+    Mic_4)     shm_name="mic-4" ;;
+    Mic_5)     shm_name="mic-5" ;;
+    Mic_6)     shm_name="mic-6" ;;
+    *)
+        echo "{\"ok\":false,\"error\":\"Unknown driver: $DRIVER_NAME\"}"
+        exit 1
+        ;;
+esac
+
+# Write test signal to SHM ring if it exists (for real testing)
+SHM_FILE="/dev/shm/pi-audio-${shm_name}"
+
+if [ -p "$SHM_FILE" ] || [ -f "$SHM_FILE" ]; then
+    # In a real adapter, this would write a sine wave test signal to the SHM ring
+    # For mock purposes, we just report success
+    :
+fi
+
+echo "{\"ok\":true,\"driver\":\"$DRIVER_NAME\",\"channel\":\"$shm_name\"}"
+exit 0
