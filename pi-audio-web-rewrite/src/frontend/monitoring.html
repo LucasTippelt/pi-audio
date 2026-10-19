@@ -77,12 +77,12 @@
     <div class="engine-grid" id="engine-grid"></div>
     <div style="margin-top:1rem;">
       <div class="meter-row">
-        <span class="meter-label">Output L</span>
+        <span class="meter-label">Woofer</span>
         <div class="meter-bar-bg"><div class="meter-bar" id="meter-l" style="width:0%;background:#555"></div></div>
         <span class="meter-val" id="meter-l-val">&mdash;</span>
       </div>
       <div class="meter-row">
-        <span class="meter-label">Output R</span>
+        <span class="meter-label">Tweeter</span>
         <div class="meter-bar-bg"><div class="meter-bar" id="meter-r" style="width:0%;background:#555"></div></div>
         <span class="meter-val" id="meter-r-val">&mdash;</span>
       </div>
@@ -204,7 +204,7 @@ async function pollEngineState() {
   }
 }
 
-setInterval(pollEngineState, 2000);
+setInterval(pollEngineState, 500);
 pollEngineState();
 
 /* ============================================================ */

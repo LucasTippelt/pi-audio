@@ -7,8 +7,8 @@ import { IncomingMessage } from 'http';
 export const CHANNELS: Record<string, number> = {
   'pgm-l': 0,
   'pgm-r': 1,
-  'tweeter': 2,
-  'woofer': 3,
+  'woofer': 2,
+  'tweeter': 3,
   'mic-1': 4,
   'mic-2': 5,
   'mic-3': 6,

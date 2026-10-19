@@ -27,6 +27,14 @@
 /* ------------------------------------------------------------------ */
 
 static constexpr uint32_t kDefaultSampleRate = 48000;
+
+/* Global pointer for HAL reopen callback (avoids lambda capture issue). */
+static StateWriter* g_stateWriter = nullptr;
+static void onHalReopen(uint32_t sampleRate, uint32_t bufferSize) {
+    if (g_stateWriter) {
+        g_stateWriter->setAudioConfig(sampleRate, bufferSize);
+    }
+}
 static constexpr uint32_t kDefaultBufferSize = 128;
 static constexpr uint32_t kDefaultNumInputs  = 2;
 static constexpr uint32_t kDefaultNumOutputs = 2;
@@ -147,7 +155,7 @@ int main(int argc, char* argv[]) {
             if (sz > 0 && sz < 65536) {
                 char* buf = static_cast<char*>(std::malloc(static_cast<size_t>(sz) + 1));
                 if (buf) {
-                    std::fread(buf, 1, static_cast<size_t>(sz), f);
+                    (void)std::fread(buf, 1, static_cast<size_t>(sz), f);
                     buf[sz] = '\0';
                     ConfigLoader::parseDeviceNames(buf, static_cast<size_t>(sz), captureDevBuf, playbackDevBuf);
                     std::free(buf);
@@ -187,23 +195,58 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    /* --- Control plane: load config. --- */
-    if (configFile) {
-        ConfigLoader loader;
-        CmdLoadParams params;
-        if (loader.load(configFile, params)) {
-            cmdQueue.push(params);
-            std::printf("[engine] Loaded config from %s\n", configFile);
-        } else {
-            std::fprintf(stderr, "[engine] Failed to load config from %s\n", configFile);
-        }
-    }
-
     /* --- State writer thread. --- */
     StateWriter stateWriter;
     stateWriter.setAudioConfig(sampleRate, bufferSize);
-    if (configFile)
-        stateWriter.setConfigPath(configFile);
+
+    /* Seed initial applied-state for reporting (do NOT auto-apply config).
+     * Read volume/mute from current.json once so StateWriter has something to report.
+     * Config is only applied when "Apply" button triggers /run/pi-audio/reload. */
+    {
+        char capBuf[128] = "";
+        char pbBuf[128] = "";
+        int initVolume = -1;
+        bool initMuted = false;
+
+        if (configFile) {
+            FILE* f = std::fopen(configFile, "r");
+            if (f) {
+                fseek(f, 0, SEEK_END);
+                long sz = ftell(f);
+                fseek(f, 0, SEEK_SET);
+                if (sz > 0 && sz < 65536) {
+                    char* buf = static_cast<char*>(std::malloc(static_cast<size_t>(sz) + 1));
+                    if (buf) {
+                        (void)std::fread(buf, 1, static_cast<size_t>(sz), f);
+                        buf[sz] = '\0';
+                        ConfigLoader::parseDeviceNames(buf, static_cast<size_t>(sz), capBuf, pbBuf);
+                        initVolume = ConfigLoader::extractVolumePercent(buf, static_cast<size_t>(sz));
+                        bool gotMuted = ConfigLoader::extractMuted(buf, static_cast<size_t>(sz), &initMuted);
+                        if (!gotMuted) initMuted = false;
+                        std::free(buf);
+                    }
+                }
+                std::fclose(f);
+            }
+        }
+
+        /* Use device names from config for seeding (already used above for HAL). */
+        const char* seedInput = capBuf[0] ? capBuf : finalCapture;
+        const char* seedOutput = pbBuf[0] ? pbBuf : finalPlayback;
+
+        stateWriter.setAppliedDevices(seedInput, seedOutput);
+        if (initVolume >= 0) stateWriter.setAppliedVolume(initVolume);
+        stateWriter.setAppliedMuted(initMuted);
+    }
+
+#ifdef __linux__
+    /* Set up callback so HAL notifies StateWriter after a successful runtime reopen. */
+    g_stateWriter = &stateWriter;
+    if (alsaHal) {
+        alsaHal->setReopenCallback(onHalReopen);
+    }
+#endif
+
     stateWriter.start(stateFile, 200);
 
     /* C5: Telemetry consumer thread — drains telQueue and feeds StateWriter. */
@@ -243,7 +286,7 @@ int main(int argc, char* argv[]) {
 
             char* buf = static_cast<char*>(std::malloc(static_cast<size_t>(sz) + 1));
             if (!buf) { std::fclose(f); continue; }
-            std::fread(buf, 1, static_cast<size_t>(sz), f);
+            (void)std::fread(buf, 1, static_cast<size_t>(sz), f);
             buf[sz] = '\0';
             std::fclose(f);
 
@@ -331,6 +374,10 @@ int main(int argc, char* argv[]) {
         std::strncpy(curPlayback, finalPlayback, sizeof(curPlayback) - 1);
         curPlayback[sizeof(curPlayback) - 1] = '\0';
 
+        /* Track current DSP format for reopen detection. */
+        uint32_t curSampleRate = sampleRate;
+        uint32_t curBufferSize = bufferSize;
+
         /* Track last volume/mute to avoid redundant commands. */
         float lastGain = 1.0f;
         bool lastMuted = false;
@@ -344,8 +391,10 @@ int main(int argc, char* argv[]) {
             if (stat("/run/pi-audio/reload", &st) != 0) continue;
 
             /* Read config file for device names and DSP params. */
-            char newCapture[128] = "default";
-            char newPlayback[128] = "default";
+            char newCapture[128];
+            char newPlayback[128];
+            uint32_t newSampleRate = 0;
+            uint32_t newBufferSize = 0;
 
             FILE* f = std::fopen(configFile, "r");
             if (f) {
@@ -355,9 +404,13 @@ int main(int argc, char* argv[]) {
                 if (sz > 0 && sz < 65536) {
                     char* buf = static_cast<char*>(std::malloc(static_cast<size_t>(sz) + 1));
                     if (buf) {
-                        std::fread(buf, 1, static_cast<size_t>(sz), f);
+                        (void)std::fread(buf, 1, static_cast<size_t>(sz), f);
                         buf[sz] = '\0';
                         ConfigLoader::parseDeviceNames(buf, static_cast<size_t>(sz), newCapture, newPlayback);
+
+                        /* Extract sample rate and buffer size for reopen detection. */
+                        newSampleRate = ConfigLoader::extractSampleRate(buf, static_cast<size_t>(sz));
+                        newBufferSize = ConfigLoader::extractBufferSize(buf, static_cast<size_t>(sz));
 
                         /* Push DSP params to command queue. */
                         {
@@ -407,6 +460,14 @@ int main(int argc, char* argv[]) {
                                 lastMuted = newMuted;
                                 hadMuted = true;
                             }
+
+                            /* Report applied state to StateWriter (with short delay for DSP settling). */
+                            {
+                                int volPct = ConfigLoader::extractVolumePercent(buf, static_cast<size_t>(sz));
+                                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                                if (volPct >= 0) stateWriter.setAppliedVolume(volPct);
+                                if (gotMuted) stateWriter.setAppliedMuted(newMuted);
+                            }
                         }
 
                         std::free(buf);
@@ -415,14 +476,40 @@ int main(int argc, char* argv[]) {
                 std::fclose(f);
             }
 
-            /* If devices changed, signal HAL reopen. */
-            if (alsaHal && (std::strcmp(newCapture, curCapture) != 0 ||
-                            std::strcmp(newPlayback, curPlayback) != 0)) {
+            /* If devices changed AND explicitly set in config (non-empty), signal HAL reopen. */
+            if (alsaHal && newCapture[0] != '\0' && newPlayback[0] != '\0' &&
+                (std::strcmp(newCapture, curCapture) != 0 || std::strcmp(newPlayback, curPlayback) != 0)) {
                 alsaHal->setCaptureDevice(newCapture);
                 alsaHal->setPlaybackDevice(newPlayback);
-                alsaHal->requestReopen();
                 std::strncpy(curCapture, newCapture, sizeof(curCapture) - 1);
                 std::strncpy(curPlayback, newPlayback, sizeof(curPlayback) - 1);
+                /* Report device change to StateWriter. */
+                stateWriter.setAppliedDevices(newCapture, newPlayback);
+            }
+
+            /* If sample rate or buffer size changed, signal HAL reopen with new params.
+             * StateWriter will be updated by the HAL callback after reopen completes. */
+#ifdef PI_AUDIO_DIAG_LOG
+            {
+                FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+                if (df) {
+                    std::fprintf(df, "[reload] sr=%u/%u bs=%u/%u\n",
+                                 (unsigned)newSampleRate, (unsigned)curSampleRate,
+                                 (unsigned)newBufferSize, (unsigned)curBufferSize);
+                    std::fclose(df);
+                }
+            }
+#endif
+            if (alsaHal && (newSampleRate != curSampleRate || newBufferSize != curBufferSize)) {
+                uint32_t sr = newSampleRate ? newSampleRate : curSampleRate;
+                uint32_t bs = newBufferSize ? newBufferSize : curBufferSize;
+#ifdef PI_AUDIO_DIAG_LOG
+                { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+                  if (df) { std::fprintf(df, "[reload] REOPEN requested %u/%u\n", (unsigned)sr, (unsigned)bs); std::fclose(df); } }
+#endif
+                alsaHal->requestReopen(sr, bs);
+                if (newSampleRate) curSampleRate = newSampleRate;
+                if (newBufferSize) curBufferSize = newBufferSize;
             }
 
             std::remove("/run/pi-audio/reload");

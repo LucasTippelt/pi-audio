@@ -118,6 +118,15 @@ public:
     /* Extract muted state from JSON "muted" field. Returns true on success. */
     static bool extractMuted(const char* json, size_t len, bool* outMuted);
 
+    /* Extract raw volume percentage (0-100) from JSON "volume" field. Returns true on success. */
+    static int extractVolumePercent(const char* json, size_t len);
+
+    /* Extract sample rate from JSON "sampleRate" field. Returns 0 if not found. */
+    static uint32_t extractSampleRate(const char* json, size_t len);
+
+    /* Extract buffer size from JSON "BufferSize" field. Returns 0 if not found. */
+    static uint32_t extractBufferSize(const char* json, size_t len);
+
     /* Get last error code. Thread-unsafe; for single-threaded control plane. */
     ConfigError getLastError() const { return m_lastError; }
 

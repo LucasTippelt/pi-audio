@@ -1198,7 +1198,7 @@ async function init() {
     setSaveStatus('Configuration loaded');
     refreshMetrics();
     setInterval(refreshMetrics, 1000);
-    setInterval(refreshDspStatus, 3000);
+    setInterval(refreshDspStatus, 500);
     setInterval(() => { $('#clock').textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }); }, 1000);
   } catch (error) {
     $('#system-label').textContent = 'Cannot reach Pi audio API';

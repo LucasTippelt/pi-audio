@@ -146,8 +146,8 @@ ws://host:8767/ws?ch=<channel>
 |---|---|---|
 | 0 | `pgm-l` | PGM program input, left channel |
 | 1 | `pgm-r` | PGM program input, right channel |
-| 2 | `tweeter` | Tweeter output after DSP processing |
-| 3 | `woofer` | Woofer output after DSP processing |
+| 2 | `woofer` | Woofer output after DSP processing |
+| 3 | `tweeter` | Tweeter output after DSP processing |
 | 4–9 | `mic-1` .. `mic-6` | Measurement microphone inputs |
 
 ### Protocol

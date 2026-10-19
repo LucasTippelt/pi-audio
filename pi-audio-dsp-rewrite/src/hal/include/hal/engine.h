@@ -52,7 +52,7 @@ public:
     void setHal(AudioHal* hal) { m_hal = hal; }
 
     /* C1: Test mode — atomic, read by DSP core in onBlock().
-     * 0=none, 1=tweeter, 2=woofer, 3=pgm-l */
+     * 0=none, 1=woofer, 2=tweeter, 3=pgm-l */
     uint8_t getTestMode() const { return m_testMode.load(); }
 
 private:

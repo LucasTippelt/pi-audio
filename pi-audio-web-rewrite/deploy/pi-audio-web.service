@@ -1,12 +1,12 @@
 [Unit]
 Description=Pi Audio Web Control Server
-After=network.target pi-audio-dsp.service
+After=network.target pi-audio-dsp.service pi-audio-engine.service
 Wants=pi-audio-dsp.service
 
 [Service]
 Type=simple
 User=www-data
-Group=www-data
+Group=audio
 WorkingDirectory=/var/www/pi-audio/pi-audio-web-rewrite
 ExecStartPre=/usr/bin/node --version
 ExecStart=/usr/bin/node dist/server.js

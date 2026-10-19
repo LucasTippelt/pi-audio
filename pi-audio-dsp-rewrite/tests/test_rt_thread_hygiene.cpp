@@ -340,7 +340,7 @@ static void test_c1_test_mode_via_cmd_queue() {
     cmd.header.version = 1;
     cmd.header.type = CMD_SET_TEST_MODE;
     cmd.header.seq = 1;
-    cmd.mode = 1; /* tweeter */
+    cmd.mode = 1; /* woofer */
     ASSERT(testCmdQ.push(cmd), "test mode command pushed");
 
     /* onBlock drains commands — test mode should update. */
@@ -356,7 +356,7 @@ static void test_c1_test_mode_via_cmd_queue() {
     info.clockState  = 1;
 
     engine.onBlock(inCh, 2, outCh, 2, info);
-    ASSERT(engine.getTestMode() == 1, "test mode updated to tweeter");
+    ASSERT(engine.getTestMode() == 1, "test mode updated to woofer");
 
     /* Push another test mode command. */
     cmd.mode = 3; /* pgm-l */

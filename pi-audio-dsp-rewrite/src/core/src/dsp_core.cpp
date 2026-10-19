@@ -55,14 +55,14 @@ void DspCore::process(float* const in[], uint32_t numInCh,
      * Noise flows through all stage chains so GainStage applies volume/mute. */
     if (m_testMode != 0) {
         switch (m_testMode) {
-            case 1: { /* Tweeter — noise on channel 0 only */
+            case 1: { /* Woofer — noise on channel 0 only */
                 for (uint32_t f = 0; f < frames; ++f) {
                     m_testNoiseSeed = m_testNoiseSeed * 1664525u + 1013904223u;
                     out[0][f] = static_cast<float>((m_testNoiseSeed >> 16) & 0xFFFF) / 65536.0f * 0.6f - 0.3f;
                 }
                 break;
             }
-            case 2: { /* Woofer — noise on channel 1 only */
+            case 2: { /* Tweeter — noise on channel 1 only */
                 for (uint32_t f = 0; f < frames; ++f) {
                     m_testNoiseSeed = m_testNoiseSeed * 1664525u + 1013904223u;
                     out[1][f] = static_cast<float>((m_testNoiseSeed >> 16) & 0xFFFF) / 65536.0f * 0.6f - 0.3f;
@@ -96,7 +96,7 @@ void DspCore::process(float* const in[], uint32_t numInCh,
         }
     } else {
         /* Normal mode: route PGM_L to BOTH local output channels.
-         * Each output gets its own DSP chain (Tweeter/Woofer) + master gain/mute.
+         * Each output gets its own DSP chain (Woofer/Tweeter) + master gain/mute.
          *
          * Input routing:
          *   - PGM_L  (input 0 by default): duplicated to out[0] and out[1]

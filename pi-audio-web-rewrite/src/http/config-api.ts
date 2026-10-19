@@ -13,7 +13,7 @@ const TEST_SPEAKER_DRIVERS = ['Tweeter', 'Woofer', 'PGM_L', 'PGM_R', 'Mic_1', 'M
 
 /* C1: Test mode mapping — matches DSP core m_testMode values. */
 const TEST_MODE_MAP: Record<string, number> = {
-    Tweeter: 1, Woofer: 2, PGM_L: 3, PGM_R: 3,
+    Woofer: 1, Tweeter: 2, PGM_L: 3, PGM_R: 3,
 };
 
 const kTestCommandPath = '/run/pi-audio/test-command';

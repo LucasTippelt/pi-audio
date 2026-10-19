@@ -28,8 +28,8 @@ No HTTP, WebSocket, or TCP servers run inside the audio process. All networking 
 ```
 PGM stereo input (ALSA capture or shared memory ring buffer)
     │
-    ├──► PGM Left ──► DSP chain ──┬──► Tweeter (output 0)
-    │                              └──► Woofer  (output 1)
+    ├──► PGM Left ──► DSP chain ──┬──► Woofer  (output 0)
+    │                              └──► Tweeter (output 1)
     │
     └──► PGM Right ──► direct output (linked speaker, future onboard DSP)
 
@@ -42,8 +42,8 @@ Mic inputs (2-6 configurable, shared memory ring buffers):
 Engine detects active tests via command queue (`CMD_SET_TEST_MODE`). During tests, real-time PGM routing is suspended.
 
 ```
-Tweeter test:  test injection ──► tweeter DSP ──► tweeter speaker (woofer silent)
 Woofer test:   test injection ──► woofer DSP  ──► woofer speaker  (tweeter silent)
+Tweeter test:  test injection ──► tweeter DSP ──► tweeter speaker (woofer silent)
 PGM_L test:    PGM ring buffer ──► monitoring only (no physical speakers)
 ```
 

@@ -693,10 +693,9 @@ uint32_t ConfigLoader::delayMsToSamples(float delayMs, uint32_t sampleRate) {
 
 bool ConfigLoader::parseDeviceNames(const char* json, size_t len,
                                       char capture[128], char playback[128]) {
-    std::strncpy(capture, "default", 127);
-    capture[127] = '\0';
-    std::strncpy(playback, "default", 127);
-    playback[127] = '\0';
+    /* Start empty — only set when found in JSON. Caller must check for empty. */
+    capture[0] = '\0';
+    playback[0] = '\0';
 
     const char* val = jsonFindKey(json, len, "input");
     if (val) {
@@ -763,4 +762,36 @@ bool ConfigLoader::extractMuted(const char* json, size_t len, bool* outMuted) {
         return true;
     }
     return false;
+}
+
+int ConfigLoader::extractVolumePercent(const char* json, size_t len) {
+    const char* val = jsonFindKey(json, len, "volume");
+    if (!val) return -1;
+    skipWhitespace(val);
+    if (strncmp(val, "null", 4) == 0) return -1;
+
+    char* end = nullptr;
+    double d = strtod(val, &end);
+    if (end == val) return -1;
+
+    int pct = static_cast<int>(d);
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    return pct;
+}
+
+uint32_t ConfigLoader::extractSampleRate(const char* json, size_t len) {
+    int64_t val = 0;
+    if (!jsonGetInt(json, len, "sampleRate", &val)) return 0;
+    if (val < 8000 || val > 192000) return 0;
+    return static_cast<uint32_t>(val);
+}
+
+uint32_t ConfigLoader::extractBufferSize(const char* json, size_t len) {
+    int64_t val = 0;
+    if (!jsonGetInt(json, len, "BufferSize", &val)) return 0;
+    /* Validate: power of 2, range 32-4096. */
+    if (val < 32 || val > 4096) return 0;
+    if ((val & (val - 1)) != 0) return 0;
+    return static_cast<uint32_t>(val);
 }

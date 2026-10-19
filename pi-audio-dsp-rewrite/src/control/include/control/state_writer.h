@@ -1,13 +1,17 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <atomic>
 #include <thread>
 #include "msg/telemetry.h"
 
 /* ------------------------------------------------------------------ */
 /*  State writer — periodic engine-state.json writer                  */
+/*  Reports actual applied DSP state, not config-file intent.         */
 /* ------------------------------------------------------------------ */
+
+static constexpr size_t kMaxPcmName = 128;
 
 class StateWriter {
 public:
@@ -26,20 +30,27 @@ public:
     /* Set audio config for status-adapter-compatible JSON output. */
     void setAudioConfig(uint32_t sampleRate, uint32_t bufferSize);
 
-    /* Set path to current.json so config fields (input/output/volume/muted)
-     * are included in engine-state.json for the web debug comparison table. */
-    void setConfigPath(const char* path);
+    /* Record what was actually applied to the DSP engine (called by reload thread).
+     * These are the real active values — NOT read from current.json on every cycle. */
+    void setAppliedVolume(int volume);
+    void setAppliedMuted(bool muted);
+    void setAppliedDevices(const char* input, const char* output);
 
 private:
     void writeState(const TelemetryBlock& tel);
 
     const char* m_statePath = nullptr;
-    const char* m_configPath = nullptr;
     uint32_t m_intervalMs   = 1000;
     uint32_t m_sampleRate   = 48000;
     uint32_t m_bufferSize   = 128;
     std::atomic<bool> m_running{false};
     std::thread m_workerThread;
+
+    /* Applied config state — updated only when reload thread confirms changes. */
+    int m_appliedVolume = -1;       /* -1 = unknown/not yet applied */
+    bool m_appliedMuted = false;
+    char m_appliedInput[kMaxPcmName]  = "";
+    char m_appliedOutput[kMaxPcmName] = "";
 
     /* Latest-snapshot: writer always reads the freshest block.
      * Atomic version tag prevents torn reads at 100Hz production rate. */

@@ -54,13 +54,13 @@ struct CmdLoadParams {
 
 struct CmdTestMode {
     CmdHeader header; /* CMD_ENTER_TEST_MODE or CMD_LEAVE_TEST_MODE */
-    uint8_t target;   /* 0=tweeter, 1=woofer, 2=pgm-l */
+    uint8_t target;   /* 0=woofer, 1=tweeter, 2=pgm-l */
 };
 
 /* C1: Set test mode via command queue — atomic update at block boundary. */
 struct CmdSetTestMode {
     CmdHeader header; /* CMD_SET_TEST_MODE */
-    uint8_t mode;     /* 0=none, 1=tweeter, 2=woofer, 3=pgm-l */
+    uint8_t mode;     /* 0=none, 1=woofer, 2=tweeter, 3=pgm-l */
 };
 
 #pragma pack(pop)

@@ -142,8 +142,8 @@ function render(data) {
   let lvlHtml = '';
   if (data.engineState && Array.isArray(data.engineState.outputLevelDb)) {
     const levels = data.engineState.outputLevelDb;
-    lvlHtml += levelMeter('L', levels[0] ?? -80);
-    lvlHtml += levelMeter('R', levels[1] ?? -80);
+    lvlHtml += levelMeter('Woofer', levels[0] ?? -80);
+    lvlHtml += levelMeter('Tweeter', levels[1] ?? -80);
   } else {
     lvlHtml = '<p class="warn">No output level data available.</p>';
   }

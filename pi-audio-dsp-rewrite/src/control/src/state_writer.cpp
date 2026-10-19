@@ -43,57 +43,19 @@ void StateWriter::setAudioConfig(uint32_t sampleRate, uint32_t bufferSize) {
     m_bufferSize = bufferSize;
 }
 
-void StateWriter::setConfigPath(const char* path) {
-    m_configPath = path;
+void StateWriter::setAppliedVolume(int volume) {
+    m_appliedVolume = volume;
 }
 
-/* Find "key": in JSON and return pointer past the colon+whitespace. */
-static const char* findJsonKey(const char* json, size_t len, const char* key) {
-    char search[64];
-    std::snprintf(search, sizeof(search), "\"%s\":", key);
-    size_t klen = std::strlen(search);
-    for (size_t i = 0; i + klen <= len; ++i) {
-        if (std::memcmp(json + i, search, klen) == 0) {
-            const char* p = json + i + klen;
-            while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') ++p;
-            return p;
-        }
-    }
-    return nullptr;
+void StateWriter::setAppliedMuted(bool muted) {
+    m_appliedMuted = muted;
 }
 
-/* Extract a JSON string value into outBuf. Returns true on success. */
-static bool extractJsonString(const char* json, size_t len, const char* key,
-                               char* outBuf, size_t bufSize) {
-    const char* p = findJsonKey(json, len, key);
-    if (!p || *p != '"') return false;
-    ++p; /* skip opening quote */
-    size_t j = 0;
-    while (*p && *p != '"' && j < bufSize - 1) {
-        if (*p == '\\' && *(p + 1)) { ++p; } /* skip escape prefix, store char */
-        outBuf[j++] = *p++;
-    }
-    outBuf[j] = '\0';
-    return true;
-}
-
-/* Extract a JSON number (int or float) for a given key. Returns true on success. */
-static bool extractJsonNumber(const char* json, size_t len, const char* key, double* out) {
-    const char* p = findJsonKey(json, len, key);
-    if (!p || *p == 'n') return false; /* null */
-    char* end = nullptr;
-    double val = strtod(p, &end);
-    if (end > p) { *out = val; return true; }
-    return false;
-}
-
-/* Extract a JSON boolean for a given key. Returns true on success. */
-static bool extractJsonBool(const char* json, size_t len, const char* key, bool* out) {
-    const char* p = findJsonKey(json, len, key);
-    if (!p) return false;
-    if (std::strncmp(p, "true", 4) == 0) { *out = true; return true; }
-    if (std::strncmp(p, "false", 5) == 0) { *out = false; return true; }
-    return false;
+void StateWriter::setAppliedDevices(const char* input, const char* output) {
+    if (input)
+        std::strncpy(m_appliedInput, input, sizeof(m_appliedInput) - 1);
+    if (output)
+        std::strncpy(m_appliedOutput, output, sizeof(m_appliedOutput) - 1);
 }
 
 /* Escape a JSON string for output: handles quotes and backslashes. */
@@ -113,37 +75,6 @@ static void writeJsonString(FILE* f, const char* s) {
 void StateWriter::writeState(const TelemetryBlock& tel) {
     if (!m_statePath) return;
 
-    /* Read config fields from current.json (input/output/volume/muted). */
-    char cfgInput[128] = "";
-    char cfgOutput[128] = "";
-    double cfgVolume = 0;
-    bool cfgMuted = false;
-    bool hasInput = false, hasOutput = false, hasVolume = false, hasMuted = false;
-
-    if (m_configPath) {
-        FILE* cf = std::fopen(m_configPath, "r");
-        if (cf) {
-            fseek(cf, 0, SEEK_END);
-            long csz = ftell(cf);
-            fseek(cf, 0, SEEK_SET);
-            if (csz > 0 && csz < 65536) {
-                char* cbuf = static_cast<char*>(malloc(static_cast<size_t>(csz) + 1));
-                if (cbuf) {
-                    std::fread(cbuf, 1, static_cast<size_t>(csz), cf);
-                    cbuf[csz] = '\0';
-
-                    hasInput = extractJsonString(cbuf, static_cast<size_t>(csz), "input", cfgInput, sizeof(cfgInput));
-                    hasOutput = extractJsonString(cbuf, static_cast<size_t>(csz), "output", cfgOutput, sizeof(cfgOutput));
-                    hasVolume = extractJsonNumber(cbuf, static_cast<size_t>(csz), "volume", &cfgVolume);
-                    hasMuted = extractJsonBool(cbuf, static_cast<size_t>(csz), "muted", &cfgMuted);
-
-                    free(cbuf);
-                }
-            }
-            std::fclose(cf);
-        }
-    }
-
     FILE* f = std::fopen(m_statePath, "w");
     if (!f) return;
 
@@ -153,28 +84,25 @@ void StateWriter::writeState(const TelemetryBlock& tel) {
     std::fprintf(f, "{\n");
     std::fprintf(f, "  \"connected\": true,\n");
 
-    /* Config fields from current.json for debug comparison table. */
-    if (hasInput) {
-        std::fputs("  \"input\": ", f); writeJsonString(f, cfgInput); std::fputc(',', f); std::fputc('\n', f);
+    /* Applied config fields — actual values loaded into the DSP engine,
+     * NOT read from current.json on every cycle. Updated by reload thread
+     * after config is applied with a short delay for settling. */
+    if (m_appliedInput[0]) {
+        std::fputs("  \"input\": ", f); writeJsonString(f, m_appliedInput); std::fputc(',', f); std::fputc('\n', f);
     } else {
         std::fprintf(f, "  \"input\": null,\n");
     }
-    if (hasOutput) {
-        std::fputs("  \"output\": ", f); writeJsonString(f, cfgOutput); std::fputc(',', f); std::fputc('\n', f);
+    if (m_appliedOutput[0]) {
+        std::fputs("  \"output\": ", f); writeJsonString(f, m_appliedOutput); std::fputc(',', f); std::fputc('\n', f);
     } else {
         std::fprintf(f, "  \"output\": null,\n");
     }
-    if (hasVolume) {
-        /* Volume is stored as integer percentage in config. */
-        std::fprintf(f, "  \"volume\": %d,\n", static_cast<int>(cfgVolume));
+    if (m_appliedVolume >= 0) {
+        std::fprintf(f, "  \"volume\": %d,\n", m_appliedVolume);
     } else {
         std::fprintf(f, "  \"volume\": null,\n");
     }
-    if (hasMuted) {
-        std::fprintf(f, "  \"muted\": %s,\n", cfgMuted ? "true" : "false");
-    } else {
-        std::fprintf(f, "  \"muted\": null,\n");
-    }
+    std::fprintf(f, "  \"muted\": %s,\n", m_appliedMuted ? "true" : "false");
 
     /* Telemetry fields. */
     std::fprintf(f, "  \"sampleRate\": %u,\n", m_sampleRate);

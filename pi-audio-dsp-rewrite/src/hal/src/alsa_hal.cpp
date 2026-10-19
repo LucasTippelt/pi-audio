@@ -7,12 +7,14 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
+#include <vector>
 #include <sched.h>
 #include <sys/mman.h>
 #include <thread>
@@ -48,189 +50,319 @@ bool AlsaHal::open(uint32_t sampleRate, uint32_t bufferSize,
 }
 
 void AlsaHal::run() {
-    /* Pre-allocate buffers: int32 for ALSA I/O, float for DSP core. */
-    size_t frameSize = sizeof(int32_t) * std::max(m_numInputs, m_numOutputs);
-    int32_t* alsaCapture  = new int32_t[m_bufferSize * m_numInputs];
-    int32_t* alsaPlayback = new int32_t[m_bufferSize * m_numOutputs];
-
-    /* Planar buffers for core (float). */
-    float* capPlanar[10];
-    float* playPlanar[10];
-    float* dspCapture   = new float[m_bufferSize * m_numInputs];
-    float* dspPlayback  = new float[m_bufferSize * m_numOutputs];
-
-    for (uint32_t ch = 0; ch < m_numInputs; ++ch)
-        capPlanar[ch] = dspCapture + ch * m_bufferSize;
-    for (uint32_t ch = 0; ch < m_numOutputs; ++ch)
-        playPlanar[ch] = dspPlayback + ch * m_bufferSize;
-
     /* S32_LE to float scale. */
     constexpr float s32Scale = 1.0f / (float)(1u << 31);
 
     uint64_t sampleIndex = 0;
 
-    /* Activate capture with blocking reads (retry for USB warmup). */
-    {
-        snd_pcm_nonblock(m_pcmCapture, 0);
-        for (int i = 0; i < 5; ++i) {
-            int32_t buf[4096] = {};
-            snd_pcm_sframes_t r = snd_pcm_readi(m_pcmCapture, buf, m_bufferSize * 2);
-            if (r > 0) break; /* Got data — capture is active. */
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
-        snd_pcm_nonblock(m_pcmCapture, 1);
-    }
+    /* Outer loop: supports runtime reopen when parameters change. */
+    while (!m_reopenRequested.load()) {
+        /* Pre-allocate buffers for current buffer size. */
+        int32_t* alsaCapture  = new int32_t[m_bufferSize * m_numInputs];
+        int32_t* alsaPlayback = new int32_t[m_bufferSize * m_numOutputs];
 
-    /* Activate playback with blocking write. */
-    {
-        int32_t silence[4096] = {};
-        snd_pcm_nonblock(m_pcmPlayback, 0);
-        snd_pcm_writei(m_pcmPlayback, silence, m_bufferSize * 2);
-        snd_pcm_nonblock(m_pcmPlayback, 1);
-    }
+        /* Planar buffers for core (float). */
+        float* capPlanar[10];
+        float* playPlanar[10];
+        float* dspCapture   = new float[m_bufferSize * m_numInputs];
+        float* dspPlayback  = new float[m_bufferSize * m_numOutputs];
 
-    while (true) {
-        /* Check capture availability with timeout.
-         * On ASYNC USB devices (UR12), capture can stall indefinitely.
-         * After waiting too long, fall through to process with silence so
-         * speaker tests and DSP processing continue uninterrupted. */
-        snd_pcm_sframes_t availCap = snd_pcm_avail_update(m_pcmCapture);
-        if (availCap < 0) {
-            /* Error state — try to recover with prepare+start sequence. */
-            int err = snd_pcm_state(m_pcmCapture);
-            if (err == SND_PCM_STATE_XRUN || err == SND_PCM_STATE_DRAINING || err == SND_PCM_STATE_PREPARED) {
-                m_xrunOverrun++;
-                snd_pcm_prepare(m_pcmCapture);
-                snd_pcm_start(m_pcmCapture);
-                std::this_thread::sleep_for(std::chrono::milliseconds(2));
-                /* Fall through to process silence — keeps telemetry flowing. */
-            } else {
-                break;
+        for (uint32_t ch = 0; ch < m_numInputs; ++ch)
+            capPlanar[ch] = dspCapture + ch * m_bufferSize;
+        for (uint32_t ch = 0; ch < m_numOutputs; ++ch)
+            playPlanar[ch] = dspPlayback + ch * m_bufferSize;
+
+        /* Activate capture with blocking reads (retry for USB warmup).
+         * At high sample rates + large buffers, ALSA needs time to fill initial buffer. */
+        {
+            constexpr uint32_t kMaxPrimeFrames = 8192;
+            uint32_t primeFrames = m_bufferSize * 2;
+            if (primeFrames > kMaxPrimeFrames) primeFrames = kMaxPrimeFrames;
+            std::vector<int32_t> capBuf(primeFrames * m_numInputs, 0);
+            snd_pcm_nonblock(m_pcmCapture, 0);
+            for (int i = 0; i < 20; ++i) {
+                snd_pcm_sframes_t r = snd_pcm_readi(m_pcmCapture, capBuf.data(), primeFrames);
+                if (r > 0) break; /* Got data — capture is active. */
+                /* On error/xrun, try to recover. */
+                int err = snd_pcm_state(m_pcmCapture);
+                if (err == SND_PCM_STATE_XRUN || err == SND_PCM_STATE_DRAINING || err == SND_PCM_STATE_PREPARED) {
+                    snd_pcm_prepare(m_pcmCapture);
+                    snd_pcm_start(m_pcmCapture);
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
             }
+            snd_pcm_nonblock(m_pcmCapture, 1);
+            { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+              if (df) { std::fprintf(df, "[hal] capture activated\n"); std::fflush(df); std::fclose(df); } }
         }
 
-        uint32_t capFrames = 0;
-        if (availCap >= static_cast<snd_pcm_sframes_t>(m_bufferSize)) {
-            /* Capture data available — read it. */
-            snd_pcm_sframes_t r = snd_pcm_readi(m_pcmCapture, alsaCapture, m_bufferSize);
-            if (r < 0) {
+        /* Activate playback with blocking write (silence fill to prime buffer). */
+        {
+            constexpr uint32_t kMaxPrimeFrames = 8192;
+            uint32_t primeFrames = m_bufferSize * 2;
+            if (primeFrames > kMaxPrimeFrames) primeFrames = kMaxPrimeFrames;
+            std::vector<int32_t> silence(primeFrames * m_numOutputs, 0);
+            snd_pcm_nonblock(m_pcmPlayback, 0);
+            snd_pcm_writei(m_pcmPlayback, silence.data(), primeFrames);
+            snd_pcm_nonblock(m_pcmPlayback, 1);
+        }
+
+        /* Inner audio processing loop. */
+        while (true) {
+            /* Check for reopen request from reload thread. */
+            if (m_reopenRequested.load()) break;
+
+            /* Check capture availability with timeout.
+             * On ASYNC USB devices (UR12), capture can stall indefinitely.
+             * After waiting too long, fall through to process with silence so
+             * speaker tests and DSP processing continue uninterrupted. */
+             snd_pcm_sframes_t availCap = snd_pcm_avail_update(m_pcmCapture);
+            if (availCap < 0) {
+                /* Error state — try to recover with prepare+start sequence. */
                 int err = snd_pcm_state(m_pcmCapture);
                 if (err == SND_PCM_STATE_XRUN || err == SND_PCM_STATE_DRAINING || err == SND_PCM_STATE_PREPARED) {
                     m_xrunOverrun++;
+#ifdef PI_AUDIO_DIAG_LOG
+                    static uint32_t lastXrunLog = 0;
+                    if (m_xrunOverrun - lastXrunLog > 100) {
+                        FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+                        if (df) { std::fprintf(df, "[hal] capXRUN total=%u state=%d\n", (unsigned)m_xrunOverrun, err); std::fclose(df); }
+                        lastXrunLog = m_xrunOverrun;
+                    }
+#endif
                     snd_pcm_prepare(m_pcmCapture);
                     snd_pcm_start(m_pcmCapture);
-                    /* Fall through to process silence. */
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                    /* Fall through to process silence — keeps telemetry flowing. */
                 } else {
-                    break;
+                    goto cleanup_buffers;
                 }
             }
-            capFrames = static_cast<uint32_t>(r);
 
-            /* Deinterleave + convert S32_LE to float planar. */
-            for (uint32_t ch = 0; ch < m_numInputs; ++ch) {
-                for (uint32_t f = 0; f < capFrames; ++f) {
-                    capPlanar[ch][f] = alsaCapture[f * m_numInputs + ch] * s32Scale;
-                }
-            }
-        } else {
-            /* No capture data — wait with timeout then fall through with silence. */
-            uint32_t waitMs = 0;
-            while (waitMs < 50) {
-                std::this_thread::sleep_for(std::chrono::microseconds(100));
-                availCap = snd_pcm_avail_update(m_pcmCapture);
-                if (availCap >= static_cast<snd_pcm_sframes_t>(m_bufferSize)) break;
-                waitMs++;
-            }
-            /* Re-check after timeout. */
+            uint32_t capFrames = 0;
             if (availCap >= static_cast<snd_pcm_sframes_t>(m_bufferSize)) {
+                /* Capture data available — read it. */
                 snd_pcm_sframes_t r = snd_pcm_readi(m_pcmCapture, alsaCapture, m_bufferSize);
-                if (r > 0) {
-                    capFrames = static_cast<uint32_t>(r);
-                    for (uint32_t ch = 0; ch < m_numInputs; ++ch) {
-                        for (uint32_t f = 0; f < capFrames; ++f) {
-                            capPlanar[ch][f] = alsaCapture[f * m_numInputs + ch] * s32Scale;
+                if (r < 0) {
+                    int err = snd_pcm_state(m_pcmCapture);
+                    if (err == SND_PCM_STATE_XRUN || err == SND_PCM_STATE_DRAINING || err == SND_PCM_STATE_PREPARED) {
+                        m_xrunOverrun++;
+                        snd_pcm_prepare(m_pcmCapture);
+                        snd_pcm_start(m_pcmCapture);
+                        /* Fall through to process silence. */
+                    } else {
+                        goto cleanup_buffers;
+                    }
+                }
+                capFrames = static_cast<uint32_t>(r);
+
+                /* Deinterleave + convert S32_LE to float planar. */
+                for (uint32_t ch = 0; ch < m_numInputs; ++ch) {
+                    for (uint32_t f = 0; f < capFrames; ++f) {
+                        capPlanar[ch][f] = alsaCapture[f * m_numInputs + ch] * s32Scale;
+                    }
+                }
+            } else {
+                /* No capture data — wait with timeout then fall through with silence. */
+                uint32_t waitMs = 0;
+                while (waitMs < 50) {
+                    std::this_thread::sleep_for(std::chrono::microseconds(100));
+                    availCap = snd_pcm_avail_update(m_pcmCapture);
+                    if (availCap >= static_cast<snd_pcm_sframes_t>(m_bufferSize)) break;
+                    waitMs++;
+                }
+                /* Re-check after timeout. */
+                if (availCap >= static_cast<snd_pcm_sframes_t>(m_bufferSize)) {
+                    snd_pcm_sframes_t r = snd_pcm_readi(m_pcmCapture, alsaCapture, m_bufferSize);
+                    if (r > 0) {
+                        capFrames = static_cast<uint32_t>(r);
+                        for (uint32_t ch = 0; ch < m_numInputs; ++ch) {
+                            for (uint32_t f = 0; f < capFrames; ++f) {
+                                capPlanar[ch][f] = alsaCapture[f * m_numInputs + ch] * s32Scale;
+                            }
                         }
                     }
                 }
+                /* If still no data, process with silence (capFrames stays 0). */
             }
-            /* If still no data, process with silence (capFrames stays 0). */
-        }
 
-        if (capFrames == 0) {
-            /* No capture data — fill with silence and use buffer size for processing. */
-            for (uint32_t ch = 0; ch < m_numInputs; ++ch) {
-                std::memset(capPlanar[ch], 0, m_bufferSize * sizeof(float));
+            if (capFrames == 0) {
+                /* No capture data — fill with silence and use buffer size for processing. */
+                m_silenceBlocks++;
+#ifdef PI_AUDIO_DIAG_LOG
+                /* Only log first occurrence per reopen cycle to avoid flooding. */
+                if (m_silenceBlocks <= 3) {
+                    FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+                    if (df) { std::fprintf(df, "[hal] silenceBlock total=%u\n", (unsigned)m_silenceBlocks); std::fclose(df); }
+                }
+#endif
+                for (uint32_t ch = 0; ch < m_numInputs; ++ch) {
+                    std::memset(capPlanar[ch], 0, m_bufferSize * sizeof(float));
+                }
+                capFrames = m_bufferSize;
             }
-            capFrames = m_bufferSize;
-        }
 
-        /* Prepare BlockInfo. */
-        BlockInfo info{};
-        info.sampleIndex = sampleIndex;
-        info.hostTimeNs  = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                               std::chrono::steady_clock::now().time_since_epoch()).count();
-        info.frames      = static_cast<uint32_t>(capFrames);
-        info.clockState  = 1; /* Locked */
+            /* Prepare BlockInfo. */
+            BlockInfo info{};
+            info.sampleIndex = sampleIndex;
+            info.hostTimeNs  = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                   std::chrono::steady_clock::now().time_since_epoch()).count();
+            info.frames      = static_cast<uint32_t>(capFrames);
+            info.clockState  = 1; /* Locked */
 
-        /* Call Engine. */
-        if (m_engine) {
-            m_engine->onBlock(capPlanar, m_numInputs, playPlanar, m_numOutputs, info);
-        }
-
-        /* Interleave + convert float to S32_LE with fade. */
-        for (uint32_t f = 0; f < static_cast<uint32_t>(capFrames); ++f) {
-            for (uint32_t ch = 0; ch < m_numOutputs; ++ch) {
-                float sample = playPlanar[ch][f] * m_fadeLevel;
-                if (sample > 1.0f) sample = 1.0f;
-                else if (sample < -1.0f) sample = -1.0f;
-                alsaPlayback[f * m_numOutputs + ch] = static_cast<int32_t>(sample * (float)(1u << 31));
+            /* Call Engine. */
+            if (m_engine) {
+                m_engine->onBlock(capPlanar, m_numInputs, playPlanar, m_numOutputs, info);
             }
-        }
 
-        /* Check playback availability before writing. */
-        snd_pcm_sframes_t availPlay = snd_pcm_avail_update(m_pcmPlayback);
-        if (availPlay < 0) {
-            /* Error state — try to recover with prepare+start. */
-            int err = snd_pcm_state(m_pcmPlayback);
-            if (err == SND_PCM_STATE_XRUN || err == SND_PCM_STATE_DRAINING || err == SND_PCM_STATE_PREPARED) {
-                m_xrunUnderrun++;
-                snd_pcm_prepare(m_pcmPlayback);
-                snd_pcm_start(m_pcmPlayback);
+            /* Interleave + convert float to S32_LE with fade. */
+            {
+                uint32_t clipCount = 0;
+                uint32_t nanCount = 0;
+                for (uint32_t f = 0; f < static_cast<uint32_t>(capFrames); ++f) {
+                    for (uint32_t ch = 0; ch < m_numOutputs; ++ch) {
+                        float sample = playPlanar[ch][f] * m_fadeLevel;
+                        if (std::isnan(sample) || std::isinf(sample)) {
+                            nanCount++;
+                            sample = 0.f;
+                        } else if (sample > 1.0f) {
+                            clipCount++;
+                            sample = 1.0f;
+                        } else if (sample < -1.0f) {
+                            clipCount++;
+                            sample = -1.0f;
+                        }
+                        alsaPlayback[f * m_numOutputs + ch] = static_cast<int32_t>(sample * (float)(1u << 31));
+                    }
+                }
+#ifdef PI_AUDIO_DIAG_LOG
+                if (clipCount > 0 || nanCount > 0) {
+                    FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+                    if (df) { std::fprintf(df, "[hal] OUTPUT: clips=%u nans=%u frames=%u\n", clipCount, nanCount, (unsigned)capFrames); std::fclose(df); }
+                }
+#endif
+            }
+
+            /* Check playback availability before writing. */
+            snd_pcm_sframes_t availPlay = snd_pcm_avail_update(m_pcmPlayback);
+            if (availPlay < 0) {
+                /* Error state — try to recover with prepare+start. */
+                int err = snd_pcm_state(m_pcmPlayback);
+                if (err == SND_PCM_STATE_XRUN || err == SND_PCM_STATE_DRAINING || err == SND_PCM_STATE_PREPARED) {
+                    m_xrunUnderrun++;
+#ifdef PI_AUDIO_DIAG_LOG
+                    static uint32_t lastPlayXrunLog = 0;
+                    if (m_xrunUnderrun - lastPlayXrunLog > 100) {
+                        FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+                        if (df) { std::fprintf(df, "[hal] playXRUN total=%u state=%d\n", (unsigned)m_xrunUnderrun, err); std::fclose(df); }
+                        lastPlayXrunLog = m_xrunUnderrun;
+                    }
+#endif
+                    snd_pcm_prepare(m_pcmPlayback);
+                    snd_pcm_start(m_pcmPlayback);
+                    sampleIndex += static_cast<uint64_t>(capFrames);
+                    continue;
+                }
+                goto cleanup_buffers;
+            }
+            if (availPlay < static_cast<snd_pcm_sframes_t>(m_bufferSize)) {
+                /* Not enough space — skip this block's output to avoid underrun. */
+#ifdef PI_AUDIO_DIAG_LOG
+                static uint32_t lastSkipLog = 0;
+                static uint32_t skipCount = 0;
+                skipCount++;
+                if (skipCount - lastSkipLog > 100) {
+                    FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+                    if (df) { std::fprintf(df, "[hal] playSKIP total=%u avail=%ld\n", (unsigned)skipCount, (long)availPlay); std::fclose(df); }
+                    lastSkipLog = skipCount;
+                }
+#endif
                 sampleIndex += static_cast<uint64_t>(capFrames);
                 continue;
             }
-            break;
-        }
-        if (availPlay < static_cast<snd_pcm_sframes_t>(m_bufferSize)) {
-            /* Not enough space — skip this block's output to avoid underrun. */
-            sampleIndex += static_cast<uint64_t>(capFrames);
-            continue;
-        }
 
-        /* Write playback (S32_LE). */
-        snd_pcm_sframes_t playFrames = snd_pcm_writei(m_pcmPlayback, alsaPlayback, m_bufferSize);
-        if (playFrames < 0) {
-            int err = snd_pcm_state(m_pcmPlayback);
-            if (err == SND_PCM_STATE_XRUN || err == SND_PCM_STATE_DRAINING || err == SND_PCM_STATE_PREPARED) {
-                m_xrunUnderrun++;
-                snd_pcm_prepare(m_pcmPlayback);
-                snd_pcm_start(m_pcmPlayback);
-                continue;
+            /* Write playback (S32_LE). */
+            snd_pcm_sframes_t playFrames = snd_pcm_writei(m_pcmPlayback, alsaPlayback, m_bufferSize);
+            if (playFrames < 0) {
+                int err = snd_pcm_state(m_pcmPlayback);
+                if (err == SND_PCM_STATE_XRUN || err == SND_PCM_STATE_DRAINING || err == SND_PCM_STATE_PREPARED) {
+                    m_xrunUnderrun++;
+                    snd_pcm_prepare(m_pcmPlayback);
+                    snd_pcm_start(m_pcmPlayback);
+                    continue;
+                }
+                goto cleanup_buffers;
             }
-            break;
+
+            /* Restore fade after xrun recovery. */
+            if (m_fadeLevel < 1.0f)
+                m_fadeLevel = 1.0f;
+
+            sampleIndex += static_cast<uint64_t>(capFrames);
         }
 
-        /* Restore fade after xrun recovery. */
-        if (m_fadeLevel < 1.0f)
-            m_fadeLevel = 1.0f;
+    cleanup_buffers:
+        delete[] alsaCapture;
+        delete[] alsaPlayback;
+        delete[] dspCapture;
+        delete[] dspPlayback;
 
-        sampleIndex += static_cast<uint64_t>(capFrames);
+        /* If reopen requested, apply new parameters and restart. */
+        if (m_reopenRequested.load()) {
+            uint32_t oldRate = m_sampleRate;
+            uint32_t oldSize = m_bufferSize;
+
+            uint32_t newRate = m_pendingSampleRate;
+            uint32_t newSize = m_pendingBufferSize;
+            if (newRate == 0) newRate = oldRate;
+            if (newSize == 0) newSize = oldSize;
+
+            { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+              if (df) { std::fprintf(df, "[hal] Reopening: %u/%u -> %u/%u\n", oldRate, oldSize, newRate, newSize); std::fflush(df); std::fclose(df); } }
+
+            /* Close existing streams. */
+            close();
+
+            { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+              if (df) { std::fprintf(df, "[hal] close() done\n"); std::fflush(df); std::fclose(df); } }
+
+            /* Update parameters and reopen. */
+            m_sampleRate = newRate;
+            m_bufferSize = newSize;
+            m_fadeLevel = 1.0f; /* Reset fade so audio isn't quiet after reopen. */
+
+            { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+              if (df) { std::fprintf(df, "[hal] calling openStreams()\n"); std::fflush(df); std::fclose(df); } }
+
+            if (!openStreams()) {
+                { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+                  if (df) { std::fprintf(df, "[hal] Reopen failed at %u/%u, falling back to %u/%u\n", newRate, newSize, oldRate, oldSize); std::fflush(df); std::fclose(df); } }
+                m_sampleRate = oldRate;
+                m_bufferSize = oldSize;
+                if (!openStreams()) {
+                    { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+                      if (df) { std::fprintf(df, "[hal] Fallback reopen also failed — stopping\n"); std::fflush(df); std::fclose(df); } }
+                    break;
+                }
+            }
+
+            { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+              if (df) { std::fprintf(df, "[hal] openStreams() succeeded\n"); std::fflush(df); std::fclose(df); } }
+
+            /* Reset reopen flag and clear pending params. */
+            m_reopenRequested.store(false);
+            m_pendingSampleRate = 0;
+            m_pendingBufferSize = 0;
+
+            /* Notify caller that reopen completed with actual parameters. */
+            if (m_reopenCallback) {
+                m_reopenCallback(m_sampleRate, m_bufferSize);
+            }
+
+            { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+              if (df) { std::fprintf(df, "[hal] Reopen complete: %u/%u\n", m_sampleRate, m_bufferSize); std::fflush(df); std::fclose(df); } }
+        }
     }
-
-    delete[] alsaCapture;
-    delete[] alsaPlayback;
-    delete[] dspCapture;
-    delete[] dspPlayback;
 }
 
 void AlsaHal::close() {
@@ -241,18 +373,29 @@ void AlsaHal::close() {
     munlockall();
 }
 
+void AlsaHal::requestReopen(uint32_t sampleRate, uint32_t bufferSize) {
+    /* Store pending parameters (0 means keep current). */
+    if (sampleRate > 0) m_pendingSampleRate = sampleRate;
+    if (bufferSize > 0) m_pendingBufferSize = bufferSize;
+    m_reopenRequested.store(true);
+}
+
 bool AlsaHal::isTimerPaced() const { return m_timerPaced; }
 
 bool AlsaHal::openStreams() {
     int err;
 
+    { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+      if (df) { std::fprintf(df, "[hal] openStreams(%u/%u) cap=%s pb=%s\n", m_sampleRate, m_bufferSize, m_captureDevice, m_playbackDevice); std::fflush(df); std::fclose(df); } }
+
     /* Open capture non-blocking. */
     err = snd_pcm_open(&m_pcmCapture, m_captureDevice, SND_PCM_STREAM_CAPTURE, SND_PCM_NONBLOCK);
-    if (err < 0) return false;
+    if (err < 0) { std::fprintf(stderr, "[hal] capture open failed: %s\n", snd_strerror(err)); return false; }
 
     /* Open playback non-blocking. */
     err = snd_pcm_open(&m_pcmPlayback, m_playbackDevice, SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK);
     if (err < 0) {
+        std::fprintf(stderr, "[hal] playback open failed: %s\n", snd_strerror(err));
         snd_pcm_close(m_pcmCapture);
         return false;
     }
@@ -277,6 +420,7 @@ bool AlsaHal::openStreams() {
 
     err = snd_pcm_hw_params(m_pcmPlayback, params);
     if (err < 0) {
+        std::fprintf(stderr, "[hal] playback hw_params failed: %s\n", snd_strerror(err));
         close();
         return false;
     }
@@ -303,16 +447,42 @@ bool AlsaHal::openStreams() {
         err = snd_pcm_hw_params(m_pcmCapture, capParams);
     }
     if (err < 0) {
+        std::fprintf(stderr, "[hal] capture hw_params failed: %s\n", snd_strerror(err));
         close();
         return false;
     }
 
     /* NO LINK — streams operate independently on ASYNC USB. */
 
+    /* Verify actual negotiated parameters. */
+    {
+        snd_pcm_hw_params_t* cur;
+        snd_pcm_hw_params_alloca(&cur);
+        snd_pcm_hw_params_current(m_pcmPlayback, cur);
+
+        unsigned int actualRate = 0;
+        snd_pcm_uframes_t actualPeriod = 0, actualBuffer = 0;
+        snd_pcm_hw_params_get_rate(cur, &actualRate, nullptr);
+        snd_pcm_hw_params_get_period_size(cur, &actualPeriod, NULL);
+        snd_pcm_hw_params_get_buffer_size(cur, &actualBuffer);
+
+        if (actualRate != m_sampleRate || actualPeriod != m_bufferSize) {
+            std::fprintf(stderr, "[hal] WARNING: ALSA negotiated %u Hz / period=%lu / buffer=%lu "
+                                 "(requested %u Hz / period=%u / buffer=%lu)\n",
+                         actualRate, (unsigned long)actualPeriod, (unsigned long)actualBuffer,
+                         m_sampleRate, (unsigned int)m_bufferSize, (unsigned long)(m_bufferSize * 4));
+        } else {
+            std::printf("[hal] ALSA params confirmed: %u Hz / period=%lu / buffer=%lu\n",
+                        actualRate, (unsigned long)actualPeriod, (unsigned long)actualBuffer);
+        }
+    }
+
     /* Get delay for fixed latency offset. */
     snd_pcm_sframes_t delay;
     snd_pcm_delay(m_pcmPlayback, &delay);
 
+    { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+      if (df) { std::fprintf(df, "[hal] openStreams() OK\n"); std::fflush(df); std::fclose(df); } }
     return true;
 }
 

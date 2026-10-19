@@ -37,7 +37,7 @@ public:
     void setMasterGain(GainStage* g) { m_masterGain = g; }
 
     /* C1: Test mode — set by Engine, read during processing.
-     * 0=none, 1=tweeter, 2=woofer, 3=pgm-l */
+     * 0=none, 1=woofer, 2=tweeter, 3=pgm-l */
     void setTestMode(uint8_t mode) { m_testMode = mode; }
     uint8_t getTestMode() const { return m_testMode; }
 
@@ -51,7 +51,7 @@ private:
     uint32_t m_numInputs      = 0;
     uint32_t m_numOutputs     = 0;
 
-    StageSet m_chains[2]; /* tweeter chain, woofer chain */
+    StageSet m_chains[2]; /* woofer chain, tweeter chain */
 
     mutable TelemetryBlock m_telemetryCache{};
 
@@ -59,7 +59,7 @@ private:
     uint8_t m_lastClockState = 1; /* Default: Locked */
     uint32_t m_clockMuteEvents = 0; /* Count of mute events due to Unlocked state */
 
-    /* C1: Test mode — 0=none, 1=tweeter, 2=woofer, 3=pgm-l. */
+    /* C1: Test mode — 0=none, 1=woofer, 2=tweeter, 3=pgm-l. */
     uint8_t m_testMode = 0;
 
     /* LCG seed for deterministic white noise generation during tests. */
