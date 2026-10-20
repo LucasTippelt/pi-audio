@@ -237,6 +237,60 @@ int main(int argc, char* argv[]) {
         stateWriter.setAppliedDevices(seedInput, seedOutput);
         if (initVolume >= 0) stateWriter.setAppliedVolume(initVolume);
         stateWriter.setAppliedMuted(initMuted);
+
+        /* Seed initial DSP applied-state from config. */
+        {
+            FullConfig cfg;
+            FILE* f2 = std::fopen(configFile, "r");
+            if (f2) {
+                fseek(f2, 0, SEEK_END);
+                long sz2 = ftell(f2);
+                fseek(f2, 0, SEEK_SET);
+                if (sz2 > 0 && sz2 < 65536) {
+                    char* buf2 = static_cast<char*>(std::malloc(static_cast<size_t>(sz2) + 1));
+                    if (buf2) {
+                        (void)std::fread(buf2, 1, static_cast<size_t>(sz2), f2);
+                        buf2[sz2] = '\0';
+                        if (ConfigLoader::parseFullConfig(buf2, static_cast<size_t>(sz2), cfg)) {
+                            AppliedCrossover cxW = {};
+                            cxW.frequencyHz = cfg.crossoverWoofer.frequencyHz;
+                            std::strncpy(cxW.topology, cfg.crossoverWoofer.topologyName, sizeof(cxW.topology) - 1);
+                            cxW.slopeDbOct = cfg.crossoverWoofer.slopeDbOct;
+                            cxW.enabled = cfg.crossoverWoofer.enabled;
+                            stateWriter.setAppliedCrossover(0, cxW);
+
+                            AppliedCrossover cxT = {};
+                            cxT.frequencyHz = cfg.crossoverTweeter.frequencyHz;
+                            std::strncpy(cxT.topology, cfg.crossoverTweeter.topologyName, sizeof(cxT.topology) - 1);
+                            cxT.slopeDbOct = cfg.crossoverTweeter.slopeDbOct;
+                            cxT.enabled = cfg.crossoverTweeter.enabled;
+                            stateWriter.setAppliedCrossover(1, cxT);
+
+                            {
+                                AppliedLimiter lim = {};
+                                lim.thresholdDb = cfg.limiterThresholdDb;
+                                lim.attackMs = cfg.limiterAttackMs;
+                                lim.releaseMs = cfg.limiterReleaseMs;
+                                lim.ratio = cfg.limiterRatio;
+                                lim.enabled = cfg.limiterEnabled;
+                                stateWriter.setAppliedLimiter(0, lim);
+                                stateWriter.setAppliedLimiter(1, lim);
+                            }
+
+                            for (uint32_t i = 0; i < cfg.driverCount && i < kMaxDrivers; ++i) {
+                                uint32_t delaySamples = ConfigLoader::delayMsToSamples(
+                                    cfg.drivers[i].delayMs, cfg.sampleRate);
+                                stateWriter.setAppliedDriver(
+                                    cfg.drivers[i].name, delaySamples,
+                                    cfg.drivers[i].trimDb, cfg.drivers[i].phaseInvert != 0);
+                            }
+                        }
+                        std::free(buf2);
+                    }
+                }
+                std::fclose(f2);
+            }
+        }
     }
 
 #ifdef __linux__
@@ -418,6 +472,49 @@ int main(int argc, char* argv[]) {
                             CmdLoadParams params;
                             if (loader.load(configFile, params)) {
                                 cmdQueue.push(params);
+                            }
+                        }
+
+                        /* Report applied DSP state to StateWriter from parsed config. */
+                        {
+                            FullConfig cfg;
+                            if (ConfigLoader::parseFullConfig(buf, static_cast<size_t>(sz), cfg)) {
+                                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+                                AppliedCrossover cxW = {
+                                    cfg.crossoverWoofer.frequencyHz,
+                                    {},
+                                    cfg.crossoverWoofer.slopeDbOct,
+                                    cfg.crossoverWoofer.enabled
+                                };
+                                std::strncpy(cxW.topology, cfg.crossoverWoofer.topologyName, sizeof(cxW.topology) - 1);
+                                stateWriter.setAppliedCrossover(0, cxW);
+
+                                AppliedCrossover cxT = {
+                                    cfg.crossoverTweeter.frequencyHz,
+                                    {},
+                                    cfg.crossoverTweeter.slopeDbOct,
+                                    cfg.crossoverTweeter.enabled
+                                };
+                                std::strncpy(cxT.topology, cfg.crossoverTweeter.topologyName, sizeof(cxT.topology) - 1);
+                                stateWriter.setAppliedCrossover(1, cxT);
+
+                                {
+                                    AppliedLimiter lim = {
+                                        cfg.limiterThresholdDb, cfg.limiterAttackMs,
+                                        cfg.limiterReleaseMs, cfg.limiterRatio, cfg.limiterEnabled
+                                    };
+                                    stateWriter.setAppliedLimiter(0, lim);
+                                    stateWriter.setAppliedLimiter(1, lim);
+                                }
+
+                                for (uint32_t i = 0; i < cfg.driverCount && i < kMaxDrivers; ++i) {
+                                    uint32_t delaySamples = ConfigLoader::delayMsToSamples(
+                                        cfg.drivers[i].delayMs, cfg.sampleRate);
+                                    stateWriter.setAppliedDriver(
+                                        cfg.drivers[i].name, delaySamples,
+                                        cfg.drivers[i].trimDb, cfg.drivers[i].phaseInvert != 0);
+                                }
                             }
                         }
 

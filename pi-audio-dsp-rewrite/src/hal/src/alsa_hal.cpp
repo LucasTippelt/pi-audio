@@ -112,6 +112,23 @@ void AlsaHal::run() {
             /* Check for reopen request from reload thread. */
             if (m_reopenRequested.load()) break;
 
+            /* Wait until BOTH capture has data AND playback has space.
+             * On ASYNC USB devices with separate streams, running ahead of
+             * playback causes buffer fills and dropped blocks (playSKIP).
+             * Gate on both sides so we never produce a block we can't deliver. */
+            {
+                uint32_t waitMs = 0;
+                while (waitMs < 50) {
+                    snd_pcm_sframes_t ac = snd_pcm_avail_update(m_pcmCapture);
+                    snd_pcm_sframes_t ap = snd_pcm_avail_update(m_pcmPlayback);
+                    if (ac >= static_cast<snd_pcm_sframes_t>(m_bufferSize) &&
+                        ap >= static_cast<snd_pcm_sframes_t>(m_bufferSize)) break;
+                    if (ac < 0 || ap < 0) break; /* Error — handle below. */
+                    std::this_thread::sleep_for(std::chrono::microseconds(100));
+                    waitMs++;
+                }
+            }
+
             /* Check capture availability with timeout.
              * On ASYNC USB devices (UR12), capture can stall indefinitely.
              * After waiting too long, fall through to process with silence so
@@ -122,11 +139,18 @@ void AlsaHal::run() {
                 int err = snd_pcm_state(m_pcmCapture);
                 if (err == SND_PCM_STATE_XRUN || err == SND_PCM_STATE_DRAINING || err == SND_PCM_STATE_PREPARED) {
                     m_xrunOverrun++;
+                    /* Partial fade for capture xrun — output data is still valid but input gap. */
+                    if (m_fadeStepsRemaining <= 0) {
+                        m_fadeLevel = 0.5f;
+                        m_fadeStartLevel = 0.5f;
+                        m_fadeStepsRemaining = kFadeRestoreSteps / 2;
+                    }
 #ifdef PI_AUDIO_DIAG_LOG
                     static uint32_t lastXrunLog = 0;
-                    if (m_xrunOverrun - lastXrunLog > 100) {
+                    if (m_xrunOverrun - lastXrunLog > 10) {
                         FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
-                        if (df) { std::fprintf(df, "[hal] capXRUN total=%u state=%d\n", (unsigned)m_xrunOverrun, err); std::fclose(df); }
+                        if (df) { std::fprintf(df, "[hal] capXRUN total=%u state=%d fade=%.3f\n",
+                                  (unsigned)m_xrunOverrun, err, m_fadeLevel); std::fclose(df); }
                         lastXrunLog = m_xrunOverrun;
                     }
 #endif
@@ -147,6 +171,12 @@ void AlsaHal::run() {
                     int err = snd_pcm_state(m_pcmCapture);
                     if (err == SND_PCM_STATE_XRUN || err == SND_PCM_STATE_DRAINING || err == SND_PCM_STATE_PREPARED) {
                         m_xrunOverrun++;
+                        /* Partial fade for capture xrun — output data is still valid but input gap. */
+                        if (m_fadeStepsRemaining <= 0) {
+                            m_fadeLevel = 0.5f;
+                            m_fadeStartLevel = 0.5f;
+                            m_fadeStepsRemaining = kFadeRestoreSteps / 2;
+                        }
                         snd_pcm_prepare(m_pcmCapture);
                         snd_pcm_start(m_pcmCapture);
                         /* Fall through to process silence. */
@@ -217,7 +247,7 @@ void AlsaHal::run() {
 
             /* Interleave + convert float to S32_LE with fade. */
             {
-                uint32_t clipCount = 0;
+                uint32_t clipCount[2] = {0, 0}; /* per-channel clip counts */
                 uint32_t nanCount = 0;
                 for (uint32_t f = 0; f < static_cast<uint32_t>(capFrames); ++f) {
                     for (uint32_t ch = 0; ch < m_numOutputs; ++ch) {
@@ -226,19 +256,21 @@ void AlsaHal::run() {
                             nanCount++;
                             sample = 0.f;
                         } else if (sample > 1.0f) {
-                            clipCount++;
+                            clipCount[ch < 2 ? ch : 1]++;
                             sample = 1.0f;
                         } else if (sample < -1.0f) {
-                            clipCount++;
+                            clipCount[ch < 2 ? ch : 1]++;
                             sample = -1.0f;
                         }
                         alsaPlayback[f * m_numOutputs + ch] = static_cast<int32_t>(sample * (float)(1u << 31));
                     }
                 }
 #ifdef PI_AUDIO_DIAG_LOG
-                if (clipCount > 0 || nanCount > 0) {
+                uint32_t totalClips = clipCount[0] + clipCount[1];
+                if (totalClips > 0 || nanCount > 0) {
                     FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
-                    if (df) { std::fprintf(df, "[hal] OUTPUT: clips=%u nans=%u frames=%u\n", clipCount, nanCount, (unsigned)capFrames); std::fclose(df); }
+                    if (df) { std::fprintf(df, "[hal] OUTPUT: clips=[%u %u] nans=%u frames=%u\n",
+                              (unsigned)clipCount[0], (unsigned)clipCount[1], (unsigned)nanCount, (unsigned)capFrames); std::fclose(df); }
                 }
 #endif
             }
@@ -250,11 +282,16 @@ void AlsaHal::run() {
                 int err = snd_pcm_state(m_pcmPlayback);
                 if (err == SND_PCM_STATE_XRUN || err == SND_PCM_STATE_DRAINING || err == SND_PCM_STATE_PREPARED) {
                     m_xrunUnderrun++;
+                    /* Fade out to prevent click on silence gap. */
+                    m_fadeLevel = 0.0f;
+                    m_fadeStartLevel = 0.0f;
+                    m_fadeStepsRemaining = kFadeRestoreSteps;
 #ifdef PI_AUDIO_DIAG_LOG
                     static uint32_t lastPlayXrunLog = 0;
-                    if (m_xrunUnderrun - lastPlayXrunLog > 100) {
+                    if (m_xrunUnderrun - lastPlayXrunLog > 10) {
                         FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
-                        if (df) { std::fprintf(df, "[hal] playXRUN total=%u state=%d\n", (unsigned)m_xrunUnderrun, err); std::fclose(df); }
+                        if (df) { std::fprintf(df, "[hal] playXRUN total=%u state=%d fadeOut\n",
+                                  (unsigned)m_xrunUnderrun, err); std::fclose(df); }
                         lastPlayXrunLog = m_xrunUnderrun;
                     }
 #endif
@@ -287,6 +324,10 @@ void AlsaHal::run() {
                 int err = snd_pcm_state(m_pcmPlayback);
                 if (err == SND_PCM_STATE_XRUN || err == SND_PCM_STATE_DRAINING || err == SND_PCM_STATE_PREPARED) {
                     m_xrunUnderrun++;
+                    /* Fade out to prevent click on silence gap. */
+                    m_fadeLevel = 0.0f;
+                    m_fadeStartLevel = 0.0f;
+                    m_fadeStepsRemaining = kFadeRestoreSteps;
                     snd_pcm_prepare(m_pcmPlayback);
                     snd_pcm_start(m_pcmPlayback);
                     continue;
@@ -294,9 +335,17 @@ void AlsaHal::run() {
                 goto cleanup_buffers;
             }
 
-            /* Restore fade after xrun recovery. */
-            if (m_fadeLevel < 1.0f)
+            /* Gradual fade-in after xrun recovery to prevent clicks. */
+            if (m_fadeStepsRemaining > 0) {
+                float targetLevel = 1.0f;
+                float stepSize = (targetLevel - m_fadeStartLevel) / static_cast<float>(kFadeRestoreSteps);
+                m_fadeLevel = m_fadeStartLevel + stepSize * static_cast<float>(kFadeRestoreSteps - m_fadeStepsRemaining);
+                if (m_fadeLevel > 1.0f) m_fadeLevel = 1.0f;
+                m_fadeStepsRemaining--;
+            } else if (m_fadeLevel < 1.0f) {
+                /* Fade fully restored — reset. */
                 m_fadeLevel = 1.0f;
+            }
 
             sampleIndex += static_cast<uint64_t>(capFrames);
         }

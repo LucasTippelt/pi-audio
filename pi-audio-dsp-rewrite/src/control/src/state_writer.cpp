@@ -1,6 +1,7 @@
 #include "control/state_writer.h"
 #include "msg/telemetry.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -56,6 +57,36 @@ void StateWriter::setAppliedDevices(const char* input, const char* output) {
         std::strncpy(m_appliedInput, input, sizeof(m_appliedInput) - 1);
     if (output)
         std::strncpy(m_appliedOutput, output, sizeof(m_appliedOutput) - 1);
+}
+
+void StateWriter::setAppliedCrossover(uint8_t chain, const AppliedCrossover& cx) {
+    if (chain < kMaxChains) {
+        m_crossover[chain] = cx;
+    }
+}
+
+void StateWriter::setAppliedLimiter(uint8_t chain, const AppliedLimiter& lim) {
+    if (chain < kMaxChains) {
+        m_limiter[chain] = lim;
+    }
+}
+
+void StateWriter::setAppliedDriver(const char* name, uint32_t delaySamples, float trimDb, bool phaseInvert) {
+    for (uint32_t i = 0; i < m_driverCount; ++i) {
+        if (std::strncmp(m_drivers[i].name, name, kMaxDriverName) == 0) {
+            m_drivers[i].delaySamples  = delaySamples;
+            m_drivers[i].trimDb        = trimDb;
+            m_drivers[i].phaseInverted = phaseInvert;
+            return;
+        }
+    }
+    if (m_driverCount < kMaxDrivers && name) {
+        std::strncpy(m_drivers[m_driverCount].name, name, kMaxDriverName - 1);
+        m_drivers[m_driverCount].delaySamples  = delaySamples;
+        m_drivers[m_driverCount].trimDb        = trimDb;
+        m_drivers[m_driverCount].phaseInverted = phaseInvert;
+        ++m_driverCount;
+    }
 }
 
 /* Escape a JSON string for output: handles quotes and backslashes. */
@@ -115,7 +146,65 @@ void StateWriter::writeState(const TelemetryBlock& tel) {
     std::fprintf(f, "  \"outputLevelDb\": [%.2f, %.2f],\n",
                   tel.outputLevelDb[0], tel.outputLevelDb[1]);
     std::fprintf(f, "  \"latencyFrames\": %u,\n", tel.latencyFrames);
-    std::fprintf(f, "  \"sampleIndex\": %llu\n", static_cast<unsigned long long>(tel.sampleIndex));
+    std::fprintf(f, "  \"sampleIndex\": %llu,\n", static_cast<unsigned long long>(tel.sampleIndex));
+
+    /* Count non-empty DSP sections for comma handling. */
+    int dspBlocks = 0;
+    for (uint8_t ch = 0; ch < kMaxChains; ++ch) {
+        const AppliedCrossover& cx = m_crossover[ch];
+        if (cx.enabled || cx.frequencyHz > 0.f) ++dspBlocks;
+    }
+    for (uint8_t ch = 0; ch < kMaxChains; ++ch) {
+        const AppliedLimiter& lim = m_limiter[ch];
+        if (lim.enabled || std::fabs(lim.thresholdDb) >= 1e-6f) ++dspBlocks;
+    }
+    if (m_driverCount > 0) ++dspBlocks;
+
+    int dspLeft = dspBlocks;
+
+    /* Per-chain crossover state. */
+    for (uint8_t ch = 0; ch < kMaxChains; ++ch) {
+        const AppliedCrossover& cx = m_crossover[ch];
+        if (!cx.enabled && cx.frequencyHz <= 0.f) continue;
+        const char* suffix = (ch == 0) ? "Woofer" : "Tweeter";
+        std::fprintf(f, "  \"crossover%s\": {\n", suffix);
+        std::fprintf(f, "    \"frequencyHz\": %.1f,\n", cx.frequencyHz);
+        std::fputs("    \"topology\": ", f); writeJsonString(f, cx.topology); std::fputc(',', f); std::fputc('\n', f);
+        std::fprintf(f, "    \"slopeDbOct\": %d,\n", cx.slopeDbOct);
+        std::fprintf(f, "    \"enabled\": %s\n", cx.enabled ? "true" : "false");
+        --dspLeft;
+        std::fprintf(f, "  }%s\n", dspLeft > 0 ? "," : "");
+    }
+
+    /* Per-chain limiter state. */
+    for (uint8_t ch = 0; ch < kMaxChains; ++ch) {
+        const AppliedLimiter& lim = m_limiter[ch];
+        if (!lim.enabled && std::fabs(lim.thresholdDb) < 1e-6f) continue;
+        const char* suffix = (ch == 0) ? "Woofer" : "Tweeter";
+        std::fprintf(f, "  \"limiter%s\": {\n", suffix);
+        std::fprintf(f, "    \"thresholdDb\": %.1f,\n", lim.thresholdDb);
+        std::fprintf(f, "    \"attackMs\": %.1f,\n", lim.attackMs);
+        std::fprintf(f, "    \"releaseMs\": %.1f,\n", lim.releaseMs);
+        std::fprintf(f, "    \"ratio\": %.1f,\n", lim.ratio);
+        std::fprintf(f, "    \"enabled\": %s\n", lim.enabled ? "true" : "false");
+        --dspLeft;
+        std::fprintf(f, "  }%s\n", dspLeft > 0 ? "," : "");
+    }
+
+    /* Driver state (named object). */
+    if (m_driverCount > 0) {
+        std::fputs("  \"drivers\": {\n", f);
+        for (uint32_t i = 0; i < m_driverCount; ++i) {
+            const AppliedDriver& d = m_drivers[i];
+            std::fprintf(f, "    \"%s\": {\n", d.name);
+            std::fprintf(f, "      \"delaySamples\": %u,\n", d.delaySamples);
+            std::fprintf(f, "      \"trimDb\": %.1f,\n", d.trimDb);
+            std::fprintf(f, "      \"phaseInverted\": %s\n", d.phaseInverted ? "true" : "false");
+            std::fprintf(f, "    }%s\n", (i + 1 == m_driverCount) ? "" : ",");
+        }
+        std::fputs("  }\n", f);
+    }
+
     std::fprintf(f, "}\n");
 
     std::fclose(f);

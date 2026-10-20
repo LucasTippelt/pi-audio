@@ -76,6 +76,16 @@ struct FullConfig {
     /* ALSA device names. */
     char captureDevice[128];
     char playbackDevice[128];
+
+    /* P4: Crossover configuration per output chain. */
+    struct CrossoverConfig {
+        float frequencyHz;     /* crossover frequency in Hz              */
+        char  topologyName[32];/* "Linkwitz-Riley", "Butterworth", etc. */
+        int   slopeDbOct;      /* 12, 18, 24, 36, or 48                 */
+        bool  enabled;
+    };
+    CrossoverConfig crossoverWoofer;
+    CrossoverConfig crossoverTweeter;
 };
 
 class ConfigLoader {
@@ -98,9 +108,23 @@ public:
     /* E3: Precompute biquad coefficients from frequency, Q, gain.
      * Uses standard DSP cookbook formulas. Returns true on success.  */
     static bool precomputeBiquadCoeffs(float cutoffHz, float sampleRate,
-                                       float q, float gainDb,
-                                       float* b0, float* b1, float* b2,
-                                       float* a1, float* a2);
+                                        float q, float gainDb,
+                                        float* b0, float* b1, float* b2,
+                                        float* a1, float* a2);
+
+    /* Crossover coefficient precomputation (control plane only).
+     * Supports Linkwitz-Riley, Butterworth, and Bessel topologies.
+     * Outputs flat array of biquad coefficients: 5 floats per section (b0,b1,b2,a1,a2).
+     * Caller must provide coeffs[] with space for at least 20 floats (4 sections × 5).
+     * Returns true on success. */
+    enum FilterType { FILTER_LOWPASS, FILTER_HIGHPASS };
+    enum CrossoverTopology { TOPO_LR, TOPO_BW, TOPO_BESEL };
+
+    static bool precomputeCrossoverCoeffs(
+        float cutoffHz, uint32_t sampleRate,
+        FilterType type, CrossoverTopology topology, int slopeDbOct,
+        float coeffs[], uint32_t* numBiquadsOut, bool* hasFirstOrderOut,
+        float* firstOrderCoefOut);
 
     /* Convert trim dB to linear gain factor. */
     static float dbToLinear(float db);
@@ -126,6 +150,9 @@ public:
 
     /* Extract buffer size from JSON "BufferSize" field. Returns 0 if not found. */
     static uint32_t extractBufferSize(const char* json, size_t len);
+
+    /* Parse raw JSON into FullConfig struct (public wrapper around parseJson). */
+    static bool parseFullConfig(const char* json, size_t len, FullConfig& cfg);
 
     /* Get last error code. Thread-unsafe; for single-threaded control plane. */
     ConfigError getLastError() const { return m_lastError; }

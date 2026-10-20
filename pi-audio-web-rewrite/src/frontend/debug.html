@@ -51,7 +51,7 @@
     .raw-json-row { display: flex; gap: 1rem; margin-bottom: 2rem; }
     .raw-json-panel { flex: 1; min-width: 0; }
     .raw-json-panel h2 { color: #00ccff; font-size: 1.1rem; border-bottom: 1px solid #333; padding-bottom: 0.3rem; margin-bottom: 0.5rem; }
-    .raw-json-panel pre { background: #0d0d1a; padding: 1rem; border-radius: 4px; overflow-x: auto; font-size: 0.78rem; white-space: pre-wrap; word-break: break-all; max-height: 350px; }
+    .raw-json-panel pre { background: #0d0d1a; padding: 1rem; border-radius: 4px; overflow-x: auto; font-size: 0.78rem; white-space: pre-wrap; word-break: break-all; max-height: none; }
   </style>
 </head>
 <body>
@@ -104,6 +104,34 @@ function matchIcon(cfg, eng) {
   const e = String(eng);
   if (c === '—' || e === '—') return '<span class="match-na">—</span>';
   return c === e ? '<span class="match-yes">&#10003;</span>' : '<span class="match-no">&#10007;</span>';
+}
+
+function resolvePath(obj, path) {
+  if (!obj || !path || !Array.isArray(path)) return undefined;
+  let cur = obj;
+  for (const seg of path) {
+    if (cur === null || cur === undefined) return undefined;
+    cur = cur[seg];
+  }
+  return cur;
+}
+
+function matchDsp(cfgVal, engVal) {
+  if (cfgVal === null || cfgVal === undefined || engVal === null || engVal === undefined) return '<span class="match-na">—</span>';
+  const cn = typeof cfgVal === 'number' ? cfgVal : parseFloat(cfgVal);
+  const en = typeof engVal === 'number' ? engVal : parseFloat(engVal);
+  if (!isNaN(cn) && !isNaN(en)) {
+    return Math.abs(cn - en) < 0.1 ? '<span class="match-yes">&#10003;</span>' : '<span class="match-no">&#10007;</span>';
+  }
+  const cs = String(cfgVal).toLowerCase().replace(/[^a-z]/g, '');
+  const es = String(engVal).toLowerCase().replace(/[^a-z]/g, '');
+  return cs === es ? '<span class="match-yes">&#10003;</span>' : '<span class="match-no">&#10007;</span>';
+}
+
+function dspRow(label, cfgVal, engVal) {
+  const cs = (cfgVal === null || cfgVal === undefined) ? '—' : String(cfgVal);
+  const es = (engVal === null || engVal === undefined) ? '—' : String(engVal);
+  return `<tr><th>${label}</th><td>${escHtml(cs)}</td><td>${escHtml(es)}</td><td>${matchDsp(cfgVal, engVal)}</td></tr>\n`;
 }
 
 function render(data) {
@@ -188,6 +216,82 @@ function render(data) {
       const es = typeof ev === 'boolean' ? (ev ? 'true' : 'false') : String(ev);
       t += `<tr><th>${label}</th><td>${escHtml(cs)}</td><td>${escHtml(es)}</td><td>${matchIcon(cv, ev)}</td></tr>\n`;
     }
+
+    // DSP comparison rows
+    const c = data.currentConfig;
+    const e = data.engineState;
+
+    // Crossover Woofer
+    const cxWooferCfg = resolvePath(c, ['crossovers', 'Woofer']);
+    const cxWooferEng = e.crossoverWoofer;
+    t += dspRow('Crossover Woofer Enabled',
+      cxWooferCfg ? cxWooferCfg.enabled : null,
+      cxWooferEng ? cxWooferEng.enabled : null);
+    t += dspRow('Crossover Woofer Freq',
+      cxWooferCfg ? cxWooferCfg.frequency : null,
+      cxWooferEng ? cxWooferEng.frequencyHz : null);
+    t += dspRow('Crossover Woofer Topology',
+      cxWooferCfg ? cxWooferCfg.topology : null,
+      cxWooferEng ? cxWooferEng.topology : null);
+    t += dspRow('Crossover Woofer Slope',
+      cxWooferCfg ? cxWooferCfg.slope : null,
+      cxWooferEng ? cxWooferEng.slopeDbOct : null);
+
+    // Crossover Tweeter
+    const cxTweeterCfg = resolvePath(c, ['crossovers', 'Tweeter']);
+    const cxTweeterEng = e.crossoverTweeter;
+    t += dspRow('Crossover Tweeter Enabled',
+      cxTweeterCfg ? cxTweeterCfg.enabled : null,
+      cxTweeterEng ? cxTweeterEng.enabled : null);
+    t += dspRow('Crossover Tweeter Freq',
+      cxTweeterCfg ? cxTweeterCfg.frequency : null,
+      cxTweeterEng ? cxTweeterEng.frequencyHz : null);
+    t += dspRow('Crossover Tweeter Topology',
+      cxTweeterCfg ? cxTweeterCfg.topology : null,
+      cxTweeterEng ? cxTweeterEng.topology : null);
+    t += dspRow('Crossover Tweeter Slope',
+      cxTweeterCfg ? cxTweeterCfg.slope : null,
+      cxTweeterEng ? cxTweeterEng.slopeDbOct : null);
+
+    // Limiter
+    const limCfg = resolvePath(c, ['limiter']);
+    const limWooferEng = e.limiterWoofer;
+    t += dspRow('Limiter Enabled',
+      limCfg ? limCfg.enabled : null,
+      limWooferEng ? limWooferEng.enabled : null);
+    t += dspRow('Limiter Threshold',
+      limCfg ? limCfg.threshold : null,
+      limWooferEng ? limWooferEng.thresholdDb : null);
+    t += dspRow('Limiter Attack',
+      limCfg ? limCfg.attack : null,
+      limWooferEng ? limWooferEng.attackMs : null);
+    t += dspRow('Limiter Release',
+      limCfg ? limCfg.release : null,
+      limWooferEng ? limWooferEng.releaseMs : null);
+    t += dspRow('Limiter Ratio',
+      limCfg ? limCfg.ratio : null,
+      limWooferEng ? limWooferEng.ratio : null);
+
+    // Drivers - match by name between config array and engine named objects
+    if (Array.isArray(c.drivers) && e.drivers && typeof e.drivers === 'object') {
+      const sr = e.sampleRate || 48000;
+      for (const drvCfg of c.drivers) {
+        const dname = drvCfg.name || '?';
+        const drvEng = e.drivers[dname];
+        // Convert engine delaySamples to ms for display and comparison
+        const engDelayMs = drvEng ? (drvEng.delaySamples / sr * 1000).toFixed(3) : null;
+        t += dspRow(`Driver: ${dname} Delay`,
+          drvCfg.delayMs != null ? Number(drvCfg.delayMs).toFixed(3) + 'ms' : null,
+          engDelayMs != null ? engDelayMs + 'ms' : null);
+        t += dspRow(`Driver: ${dname} Trim`,
+          drvCfg.trimDb != null ? drvCfg.trimDb + 'dB' : null,
+          drvEng ? drvEng.trimDb + 'dB' : null);
+        t += dspRow(`Driver: ${dname} Phase Invert`,
+           typeof drvCfg.phaseInverted === 'boolean' ? (drvCfg.phaseInverted ? 'Yes' : 'No') : null,
+           drvEng ? (drvEng.phaseInverted ? 'Yes' : 'No') : null);
+      }
+    }
+
     t += '</table>';
     cmpHtml = t;
   } else {
@@ -207,7 +311,7 @@ function render(data) {
     t += row('Volume', (c.volume ?? '\u2014') + '%');
     t += row('Muted', c.muted ? 'Yes' : 'No');
     if (c.limiter && typeof c.limiter === 'object') {
-      t += row('Limiter', `enabled: ${c.limiter.enabled ? 'Yes' : 'No'}, threshold: ${c.limiter.threshold ?? '\u2014'} dB, release: ${c.limiter.release ?? '\u2014'} ms`);
+      t += row('Limiter', `enabled: ${c.limiter.enabled ? 'Yes' : 'No'}, threshold: ${c.limiter.threshold ?? '\u2014'} dB, attack: ${c.limiter.attack ?? '\u2014'} ms, release: ${c.limiter.release ?? '\u2014'} ms, ratio: ${c.limiter.ratio ?? '\u2014'}`);
     }
     if (Array.isArray(c.drivers)) {
       const d = c.drivers.map(d => `${d.name || '?'} (delay: ${d.delayMs ?? 0}ms, trim: ${d.trimDb ?? 0}dB)`).join('\n');

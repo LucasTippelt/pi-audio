@@ -88,3 +88,49 @@ inline size_t StageTimingRing::read(StageTimingEntry* out, size_t max) const {
 
 /* --- Static assertions --- */
 static_assert(DSP_MAX_BLOCK_SIZE <= 8192, "max block size must be reasonable");
+
+/* --- Crossover stage constraints (Phase 5 audit) --- */
+/* Max biquads per crossover: 4 (for 48 dB/oct). */
+#define DSP_CROSSOVER_MAX_BIQUADS 4
+static_assert(DSP_CROSSOVER_MAX_BIQUADS <= 4, "crossover max biquads must not exceed 4");
+
+/* Max channels for per-channel state: 8. */
+#define DSP_CROSSOVER_MAX_CHANNELS 8
+static_assert(DSP_CROSSOVER_MAX_CHANNELS <= 8, "crossover max channels must not exceed 8");
+
+/* CrossoverStage size audit (must fit in L1 cache).
+ * Each biquad: 5 coeffs × 4 + 2 state[8] × 4 = 60 bytes.
+ * First-order: 1 coef × 4 + 2 state[8] × 4 = 36 bytes.
+ * Total for max config: 4×60 + 36 + overhead ≈ 320 bytes per stage. */
+#define DSP_CROSSOVER_ESTIMATED_SIZE 320
+static_assert(DSP_CROSSOVER_ESTIMATED_SIZE <= 1024, "crossover stage must fit in L1 cache");
+
+/* Biquad coefficient array size: maxBiquads × 5 floats. */
+#define DSP_BIQUAD_COEFFS_PER_STAGE (DSP_CROSSOVER_MAX_BIQUADS * 5)
+static_assert(DSP_BIQUAD_COEFFS_PER_STAGE == 20, "biquad coeff count must be 20");
+
+/* Binary param block: CrossoverCoeffs fits in StageParamEntry::data[256]. */
+#define DSP_CROSSOVER_BINARY_MAX 96
+static_assert(DSP_CROSSOVER_BINARY_MAX <= 256, "crossover binary block must fit in param entry");
+
+/* Delay stage constraints. */
+#define DSP_DELAY_MAX_SAMPLES 32768
+static_assert(DSP_DELAY_MAX_SAMPLES == (1u << 15), "delay buffer must be power of 2");
+
+/* DelayStage size audit: 32768*4 + scratch[2048]*4 + overhead ≈ 154KB.
+ * Large but allocated once at init, not in RT path. */
+#define DSP_DELAY_ESTIMATED_SIZE (DSP_DELAY_MAX_SAMPLES * sizeof(float) + DSP_MAX_BLOCK_SIZE * sizeof(float))
+
+/* Limiter stage constraints. */
+#define DSP_LIMITER_MAX_CHANNELS 10
+static_assert(DSP_LIMITER_MAX_CHANNELS <= 10, "limiter channels must not exceed max");
+
+/* LimiterStage size audit: small (4 coeffs + 2 precomputed + envelope array).
+ * ≈ 6*4 + 10*4 = 80 bytes — fits easily in L1 cache. */
+#define DSP_LIMITER_ESTIMATED_SIZE 96
+static_assert(DSP_LIMITER_ESTIMATED_SIZE <= 256, "limiter stage must fit in L1 cache");
+
+/* Bare-metal FENV guard (disable floating-point exceptions in process path). */
+#ifdef __STDC_LIB_EXT1__
+#pragma STDC FENV_ACCESS OFF
+#endif

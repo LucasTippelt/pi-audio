@@ -33,6 +33,10 @@ public:
     using ReopenCallback = void(*)(uint32_t sampleRate, uint32_t bufferSize);
     void setReopenCallback(ReopenCallback cb) { m_reopenCallback = cb; }
 
+    /* B4: Xrun counters for telemetry plumbing. */
+    uint32_t xrunUnderrunCount() const override { return m_xrunUnderrun; }
+    uint32_t xrunOverrunCount()  const override { return m_xrunOverrun; }
+
 protected:
     int rtPriority() const override { return 75; }
     bool isTimerPaced() const override;
@@ -51,10 +55,13 @@ private:
 
     bool m_timerPaced = false;
 
-    /* Xrun recovery state. */
+    /* Xrun recovery state with gradual fade-in to prevent clicks. */
     uint32_t m_xrunUnderrun = 0;
     uint32_t m_xrunOverrun  = 0;
     float m_fadeLevel = 1.0f;
+    int m_fadeStepsRemaining = 0;
+    float m_fadeStartLevel = 1.0f;
+    static constexpr int kFadeRestoreSteps = 16; /* ~32ms at 512 frames/48kHz */
 
     /* Capture starvation counter (for diagnostics). */
     uint32_t m_silenceBlocks = 0;

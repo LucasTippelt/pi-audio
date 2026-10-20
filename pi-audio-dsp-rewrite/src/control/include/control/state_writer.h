@@ -12,6 +12,31 @@
 /* ------------------------------------------------------------------ */
 
 static constexpr size_t kMaxPcmName = 128;
+static constexpr size_t kMaxChains    = 2;
+static constexpr size_t kMaxDriverName = 32;
+static constexpr size_t kMaxDrivers    = 8;
+
+struct AppliedCrossover {
+    float frequencyHz;
+    char  topology[32];
+    int   slopeDbOct;
+    bool  enabled;
+};
+
+struct AppliedLimiter {
+    float thresholdDb;
+    float attackMs;
+    float releaseMs;
+    float ratio;
+    bool  enabled;
+};
+
+struct AppliedDriver {
+    char name[kMaxDriverName];
+    uint32_t delaySamples;
+    float trimDb;
+    bool phaseInverted;
+};
 
 class StateWriter {
 public:
@@ -36,6 +61,11 @@ public:
     void setAppliedMuted(bool muted);
     void setAppliedDevices(const char* input, const char* output);
 
+    /* Per-chain applied DSP state setters. */
+    void setAppliedCrossover(uint8_t chain, const AppliedCrossover& cx);
+    void setAppliedLimiter(uint8_t chain, const AppliedLimiter& lim);
+    void setAppliedDriver(const char* name, uint32_t delaySamples, float trimDb, bool phaseInvert);
+
 private:
     void writeState(const TelemetryBlock& tel);
 
@@ -51,6 +81,12 @@ private:
     bool m_appliedMuted = false;
     char m_appliedInput[kMaxPcmName]  = "";
     char m_appliedOutput[kMaxPcmName] = "";
+
+    /* Per-chain DSP applied state. */
+    AppliedCrossover m_crossover[kMaxChains] = {};
+    AppliedLimiter   m_limiter[kMaxChains]   = {};
+    AppliedDriver    m_drivers[kMaxDrivers];
+    uint32_t         m_driverCount = 0;
 
     /* Latest-snapshot: writer always reads the freshest block.
      * Atomic version tag prevents torn reads at 100Hz production rate. */

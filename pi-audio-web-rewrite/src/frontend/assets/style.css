@@ -102,8 +102,9 @@ h1 span { color: var(--olive); }
 .cutoff-line output { color: var(--olive); font: 13px var(--mono); }
 .crossover-section .range { margin-top: 14px; }
 .crossover-list { display: grid; gap: 10px; margin-top: 15px; }
-.crossover-card { padding: 10px; background: #f5f4ed; }
-.crossover-card-head { display: flex; align-items: baseline; justify-content: space-between; }
+.crossover-card { padding: 10px; background: #f5f4ed; transition: opacity .15s; }
+.crossover-card.is-bypassed { opacity: .48; }
+.crossover-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .crossover-card-head span { color: #96988f; font: 10px var(--mono); }
 .crossover-card-head strong { font-size: 13px; }
 .crossover-card .field-label { margin: 10px 0 5px; }
@@ -163,7 +164,7 @@ h1 span { color: var(--olive); }
 .switch input:checked + span { background: var(--olive); }.switch input:checked + span::after { transform: translateX(14px); }
 .switch input:focus-visible + span { outline: 2px solid var(--olive); outline-offset: 2px; }
 .phase-toggle { width: 31px; }
-.limiter-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; margin-top: 14px; }
+.limiter-fields { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 13px; margin-top: 14px; }
 .limiter-fields .field-label { margin-top: 0; }
 .number-input { display: flex; align-items: center; gap: 4px; height: 34px; border-bottom: 1px solid var(--line); }
 .number-input input { width: 100%; min-width: 0; border: 0; outline: 0; color: var(--ink); background: transparent; font: 16px var(--mono); }

@@ -10,6 +10,9 @@
 
 class DspCore;
 class GainStage;
+#include "stages/crossover_stage.h"
+#include "stages/limiter_stage.h"
+#include "stages/trim_stage.h"
 class AudioHal;
 struct BlockInfo;
 struct TelemetryBlock;
@@ -24,8 +27,8 @@ public:
     /* Called by HAL once per audio block (A1).
      * This is the ONLY entry point from the HAL into the Engine. */
     void onBlock(float* const in[],  uint32_t numInCh,
-                 float* const out[], uint32_t numOutCh,
-                 const BlockInfo& info);
+                  float* const out[], uint32_t numOutCh,
+                  const BlockInfo& info);
 
     /* Control plane registers its command/telemetry queues here. */
     template<typename T, size_t C>
@@ -55,16 +58,42 @@ public:
      * 0=none, 1=woofer, 2=tweeter, 3=pgm-l */
     uint8_t getTestMode() const { return m_testMode.load(); }
 
+    /* P4: Crossover stage access for testing. */
+    CrossoverStage& crossoverWoofer() { return m_crossoverWoofer; }
+    CrossoverStage& crossoverTweeter() { return m_crossoverTweeter; }
+    bool isCrossoverActive() const { return m_crossoverActive; }
+
+    /* Limiter stage access. */
+    LimiterStage& limiterWoofer() { return m_limiterWoofer; }
+    LimiterStage& limiterTweeter() { return m_limiterTweeter; }
+
+    /* Trim stage access (includes phase inversion). */
+    TrimStage& trimWoofer() { return m_trimWoofer; }
+    TrimStage& trimTweeter() { return m_trimTweeter; }
+
 private:
     DspCore* m_core = nullptr;
     AudioHal* m_hal  = nullptr; /* B4: optional, for xrun counters in telemetry */
-    void* m_cmdQueue   = nullptr; /* opaque pointer to CmdQueue */
+    void* m_cmdQueue   = nullptr; /* opaque pointer to CmdQueue<CmdLoadParams> */
     void* m_telQueue   = nullptr; /* opaque pointer to CmdQueue<TelemetryBlock> */
     void* m_testCmdQueue = nullptr; /* C1: opaque pointer to CmdQueue<CmdSetTestMode> */
     void* m_ctrlCmdQueue = nullptr; /* Control queue for gain/mute commands */
 
     GainStage* m_tweeterGain = nullptr; /* Direct pointers for O(1) command routing */
     GainStage* m_wooferGain  = nullptr;
+
+    /* P4: Crossover stages — one per output chain. */
+    CrossoverStage m_crossoverWoofer;
+    CrossoverStage m_crossoverTweeter;
+    bool m_crossoverActive = false;
+
+    /* Limiter stages — one per output chain, after crossover in the DSP chain. */
+    LimiterStage m_limiterWoofer;
+    LimiterStage m_limiterTweeter;
+
+    /* Trim stages — one per output chain (gain + phase inversion). */
+    TrimStage m_trimWoofer;
+    TrimStage m_trimTweeter;
 
     uint64_t m_sampleIndex = 0;
 
@@ -73,4 +102,5 @@ private:
 
     void drainCommands();     /* apply pending commands at block boundary */
     void pushTelemetry(const BlockInfo& info);
+    void applyCrossoverParams(const uint8_t* data, uint32_t len);
 };

@@ -124,7 +124,7 @@ All POST actions routed through `/api/:action`:
 - **Binaries**: Existence and executable permissions of engine binary
 - **Output Levels (Live)**: Real-time L/R level meters from engine telemetry
 - **Engine Telemetry**: Sequence number, XRUN counters, clock state, latency frames, sample index
-- **Engine State vs Config**: Side-by-side comparison of config file values vs running engine state with match indicators
+- **Engine State vs Config**: Side-by-side comparison of config file values vs running engine state with match indicators. Includes detailed DSP parameter rows for crossover (enabled, frequency, topology, slope per driver), limiter (threshold, attack, release, ratio), and drivers (delay in ms, trim dB, phase inversion)
 - **Current Configuration**: Full current.json contents rendered as table
 - **Raw JSON Panels**: Raw engine-state.json and current.json side by side
 - **ALSA**: Sound card list and mixer controls from `aplay -l` and `amixer scontrols`
@@ -191,6 +191,7 @@ Per-output crossover filter settings. One entry per driver name (e.g. `Woofer`, 
 
 ```typescript
 interface CrossoverConfig {
+  enabled: boolean;     // Enable/disable crossover for this driver
   frequency: number;    // 30 – 20000 Hz
   topology: Topology;   // 'Linkwitz-Riley' | 'Butterworth' | 'Bessel'
   slope: number;        // 12 | 18 | 24 | 36 | 48 (dB/octave)
@@ -234,7 +235,9 @@ Output protection limiter.
 interface LimiterConfig {
   enabled: boolean;
   threshold: number;    // -24 to 0 dBFS
+  attack: number;       // 0.1 – 100 ms
   release: number;      // 10 – 2000 ms
+  ratio: number;        // 1 – 20 (:1)
 }
 ```
 
@@ -258,10 +261,14 @@ Slope determines filter steepness: 12 dB/oct = 2nd order, 18 dB/oct = 3rd, 24 dB
 
 Crossover frequency is clamped to 30–20 kHz by `normalizeState()`. The default 2500 Hz crossover point suits typical tweeter/woofer pairings. Lower frequencies (e.g., 800–1500 Hz) for soft-dome tweeters, higher (3–5 kHz) for compression drivers.
 
+### Crossover Bypass
+
+Each driver's crossover can be toggled on/off independently via the `enabled` field. When disabled, the driver receives full-bandwidth signal with no filter applied. The frontend shows a toggle switch per crossover card and visually dims bypassed cards (48% opacity).
+
 ### Frontend Visualization
 
 The frontend renders a combined woofer+tweeter frequency response curve on a Canvas with logarithmic X-axis. The curve computes:
-- Individual driver crossover filter response per topology formula
+- Individual driver crossover filter response per topology formula (skipped when crossover is disabled)
 - PEQ band contributions summed in dB
 - Combined magnitude (for Linkwitz-Riley pairs: coherent summation; others: energy sum)
 

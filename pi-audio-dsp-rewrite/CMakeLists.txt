@@ -39,6 +39,11 @@ add_library(dsp_core STATIC
     src/core/src/dsp_core.cpp
     src/core/src/routing.cpp
     src/core/src/stages/gain_stage.cpp
+    src/core/src/stages/biquad_stage.cpp
+    src/core/src/stages/crossover_stage.cpp
+    src/core/src/stages/trim_stage.cpp
+    src/core/src/stages/delay_stage.cpp
+    src/core/src/stages/limiter_stage.cpp
     src/core/src/drift_controller.cpp
     src/core/src/fractional_resampler.cpp
 )
@@ -201,6 +206,50 @@ target_include_directories(test_input_routing PRIVATE ${REWRITE_CORE_INC} ${REWR
 target_link_libraries(test_input_routing PRIVATE dsp_core msg_lib pthread m)
 add_test(NAME test_input_routing COMMAND test_input_routing)
 
+# BiquadStage tests (Phase 1: crossover stages)
+add_executable(test_biquad_stage tests/test_biquad_stage.cpp)
+target_include_directories(test_biquad_stage PRIVATE ${REWRITE_CORE_INC} ${REWRITE_CORE_SRC} ${REWRITE_MSG_INC})
+target_link_libraries(test_biquad_stage PRIVATE dsp_core msg_lib pthread m)
+add_test(NAME test_biquad_stage COMMAND test_biquad_stage)
+
+# CrossoverStage tests (Phase 3: cascaded filter chain)
+add_executable(test_crossover_stage tests/test_crossover_stage.cpp)
+target_include_directories(test_crossover_stage PRIVATE ${REWRITE_CORE_INC} ${REWRITE_CORE_SRC} ${REWRITE_MSG_INC})
+target_link_libraries(test_crossover_stage PRIVATE dsp_core msg_lib pthread m)
+add_test(NAME test_crossover_stage COMMAND test_crossover_stage)
+
+# Engine integration tests (Phase 4: crossover pipeline wiring)
+add_executable(test_engine_integration tests/test_engine_integration.cpp)
+target_include_directories(test_engine_integration PRIVATE ${REWRITE_HAL_INC} ${REWRITE_CORE_INC} ${REWRITE_CORE_SRC} ${REWRITE_MSG_INC} ${REWRITE_CTRL_INC})
+target_link_libraries(test_engine_integration PRIVATE hal_sim dsp_core control_plane msg_lib pthread m)
+add_test(NAME test_engine_integration COMMAND test_engine_integration)
+
+# End-to-end crossover validation (Phase 5: full pipeline + bare-metal audit)
+add_executable(test_crossover_e2e tests/test_crossover_e2e.cpp)
+target_include_directories(test_crossover_e2e PRIVATE ${REWRITE_HAL_INC} ${REWRITE_CORE_INC} ${REWRITE_CORE_SRC} ${REWRITE_MSG_INC} ${REWRITE_CTRL_INC})
+target_link_libraries(test_crossover_e2e PRIVATE hal_sim dsp_core control_plane msg_lib pthread m)
+add_test(NAME test_crossover_e2e COMMAND test_crossover_e2e)
+
+# TrimStage tests (fixed linear gain with phase inversion)
+add_executable(test_trim tests/test_trim.cpp)
+target_include_directories(test_trim PRIVATE ${REWRITE_CORE_INC} ${REWRITE_CORE_SRC} ${REWRITE_MSG_INC})
+target_link_libraries(test_trim PRIVATE dsp_core msg_lib pthread m)
+add_test(NAME test_trim COMMAND test_trim)
+
+# DelayStage tests (circular buffer delay line)
+add_executable(test_delay tests/test_delay.cpp)
+target_include_directories(test_delay PRIVATE ${REWRITE_CORE_INC} ${REWRITE_CORE_SRC} ${REWRITE_MSG_INC})
+target_link_libraries(test_delay PRIVATE dsp_core msg_lib pthread m)
+add_test(NAME test_delay COMMAND test_delay)
+
+# LimiterStage tests (peak limiter with attack/release envelope follower)
+add_executable(test_limiter tests/test_limiter.cpp)
+target_include_directories(test_limiter PRIVATE ${REWRITE_CORE_INC} ${REWRITE_CORE_SRC} ${REWRITE_MSG_INC})
+target_link_libraries(test_limiter PRIVATE dsp_core msg_lib pthread m)
+add_test(NAME test_limiter COMMAND test_limiter)
+
+# ------------------------------------------------------------------ #
+#  Install                                                            #
 # ------------------------------------------------------------------ #
 #  Install                                                            #
 # ------------------------------------------------------------------

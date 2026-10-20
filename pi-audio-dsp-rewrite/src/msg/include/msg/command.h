@@ -60,7 +60,7 @@ struct CmdTestMode {
 /* C1: Set test mode via command queue — atomic update at block boundary. */
 struct CmdSetTestMode {
     CmdHeader header; /* CMD_SET_TEST_MODE */
-    uint8_t mode;     /* 0=none, 1=woofer, 2=tweeter, 3=pgm-l */
+    uint8_t mode;     /* 0=none, 1=woofer-noise, 2=tweeter-noise, 3=pgm-test (PGM_L to both chains) */
 };
 
 #pragma pack(pop)

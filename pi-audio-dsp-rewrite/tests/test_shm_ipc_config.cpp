@@ -533,6 +533,393 @@ static void test_e3_integration_shm_restart() {
 #endif
 }
 
+/* ================================================================== */
+/*  Phase 2: Crossover coefficient precomputation                     */
+/* ================================================================== */
+
+static void test_phase2_lr24_coefficients_valid() {
+    std::printf("  P2: LR24 coefficients valid... ");
+
+    float coeffs[20] = {};
+    uint32_t numBiquads = 0;
+    bool hasFirstOrder = false;
+    float firstOrderCoef = 0.f;
+
+    bool result = ConfigLoader::precomputeCrossoverCoeffs(
+        2500.0f, 48000,
+        ConfigLoader::FILTER_LOWPASS,
+        ConfigLoader::TOPO_LR, 24,
+        coeffs, &numBiquads, &hasFirstOrder, &firstOrderCoef);
+
+    ASSERT(result, "LR24 LP precompute succeeds");
+    ASSERT(numBiquads == 2, "LR24 has 2 biquad sections");
+    ASSERT(!hasFirstOrder, "LR24 has no first-order section");
+
+    /* Both sections should have identical coefficients (Q=0.7071 each). */
+    ASSERT(std::fabs(coeffs[0] - coeffs[5]) < 1e-6f, "section 0 and 1 b0 match");
+    ASSERT(std::fabs(coeffs[3] - coeffs[8]) < 1e-6f, "section 0 and 1 a1 match");
+
+    /* Stability: |a2| < 1 for each section. */
+    for (uint32_t i = 0; i < numBiquads; ++i) {
+        float a2 = coeffs[i * 5 + 4];
+        ASSERT(std::fabs(a2) < 1.0f, "each biquad is stable (|a2|<1)");
+    }
+
+    /* Lowpass: DC gain should be near unity (b0+b1+b2 ≈ 1, a1+a2 ≈ -1 for normalized). */
+    {
+        float dcNum = coeffs[0] + coeffs[1] + coeffs[2];
+        float dcDen = 1.0f + coeffs[3] + coeffs[4];
+        float dcGain = dcNum / dcDen;
+        ASSERT(std::fabs(dcGain - 1.0f) < 0.01f, "DC gain near unity for LP");
+    }
+
+    std::printf("ok\n");
+}
+
+static void test_phase2_bw12_coefficients_valid() {
+    std::printf("  P2: BW12 coefficients valid... ");
+
+    float coeffs[20] = {};
+    uint32_t numBiquads = 0;
+    bool hasFirstOrder = false;
+    float firstOrderCoef = 0.f;
+
+    bool result = ConfigLoader::precomputeCrossoverCoeffs(
+        3000.0f, 48000,
+        ConfigLoader::FILTER_HIGHPASS,
+        ConfigLoader::TOPO_BW, 12,
+        coeffs, &numBiquads, &hasFirstOrder, &firstOrderCoef);
+
+    ASSERT(result, "BW12 HP precompute succeeds");
+    ASSERT(numBiquads == 1, "BW12 has 1 biquad section");
+    ASSERT(!hasFirstOrder, "BW12 has no first-order section");
+
+    /* Highpass: DC gain should be near zero. */
+    {
+        float dcNum = coeffs[0] + coeffs[1] + coeffs[2];
+        float dcDen = 1.0f + coeffs[3] + coeffs[4];
+        float dcGain = dcNum / dcDen;
+        ASSERT(std::fabs(dcGain) < 0.01f, "DC gain near zero for HP");
+    }
+
+    /* Highpass: Nyquist gain should be near unity. */
+    {
+        float nyqNum = coeffs[0] - coeffs[1] + coeffs[2];
+        float nyqDen = 1.0f - coeffs[3] + coeffs[4];
+        float nyqGain = nyqNum / nyqDen;
+        ASSERT(std::fabs(nyqGain - 1.0f) < 0.01f, "Nyquist gain near unity for HP");
+    }
+
+    std::printf("ok\n");
+}
+
+static void test_phase2_bessel24_coefficients_valid() {
+    std::printf("  P2: Bessel24 coefficients valid... ");
+
+    float coeffs[20] = {};
+    uint32_t numBiquads = 0;
+    bool hasFirstOrder = false;
+    float firstOrderCoef = 0.f;
+
+    bool result = ConfigLoader::precomputeCrossoverCoeffs(
+        2500.0f, 48000,
+        ConfigLoader::FILTER_LOWPASS,
+        ConfigLoader::TOPO_BESEL, 24,
+        coeffs, &numBiquads, &hasFirstOrder, &firstOrderCoef);
+
+    ASSERT(result, "Bessel24 LP precompute succeeds");
+    ASSERT(numBiquads == 2, "Bessel24 has 2 biquad sections");
+    ASSERT(!hasFirstOrder, "Bessel24 has no first-order section");
+
+    /* Both sections stable. */
+    for (uint32_t i = 0; i < numBiquads; ++i) {
+        float a1 = coeffs[i * 5 + 3];
+        float a2 = coeffs[i * 5 + 4];
+        ASSERT(std::fabs(a2) < 1.0f, "biquad stable (|a2|<1)");
+        ASSERT(std::fabs(a1) < 1.0f + std::fabs(a2), "triangle inequality holds");
+    }
+
+    /* Bessel sections have different Q values → different coefficients. */
+    ASSERT(std::fabs(coeffs[0] - coeffs[5]) > 1e-4f, "bessel sections differ (Q1!=Q2)");
+
+    std::printf("ok\n");
+}
+
+static void test_phase2_first_order_18db() {
+    std::printf("  P2: First-order 18dB... ");
+
+    float coeffs[20] = {};
+    uint32_t numBiquads = 0;
+    bool hasFirstOrder = false;
+    float firstOrderCoef = 0.f;
+
+    bool result = ConfigLoader::precomputeCrossoverCoeffs(
+        2500.0f, 48000,
+        ConfigLoader::FILTER_LOWPASS,
+        ConfigLoader::TOPO_BW, 18,
+        coeffs, &numBiquads, &hasFirstOrder, &firstOrderCoef);
+
+    ASSERT(result, "BW18 LP precompute succeeds");
+    ASSERT(numBiquads == 1, "BW18 has 1 biquad section");
+    ASSERT(hasFirstOrder, "BW18 has first-order section");
+    ASSERT(firstOrderCoef > 0.f && firstOrderCoef < 1.0f, "first-order alpha in (0,1)");
+
+    std::printf("ok\n");
+}
+
+static void test_phase2_nyquist_boundary() {
+    std::printf("  P2: Nyquist boundary... ");
+
+    float coeffs[20] = {};
+    uint32_t numBiquads = 0;
+    bool hasFirstOrder = false;
+    float firstOrderCoef = 0.f;
+
+    /* Cutoff just below Nyquist (23kHz for 48kHz sample rate). */
+    bool result = ConfigLoader::precomputeCrossoverCoeffs(
+        23000.0f, 48000,
+        ConfigLoader::FILTER_LOWPASS,
+        ConfigLoader::TOPO_LR, 24,
+        coeffs, &numBiquads, &hasFirstOrder, &firstOrderCoef);
+
+    ASSERT(result, "cutoff just below Nyquist produces valid coefficients");
+
+    /* All coefficients must be finite. */
+    for (uint32_t i = 0; i < numBiquads * 5; ++i) {
+        ASSERT(!std::isnan(coeffs[i]) && !std::isinf(coeffs[i]), "coeff is finite near Nyquist");
+    }
+
+    /* Cutoff at exactly Nyquist must fail. */
+    result = ConfigLoader::precomputeCrossoverCoeffs(
+        24000.0f, 48000,
+        ConfigLoader::FILTER_LOWPASS,
+        ConfigLoader::TOPO_LR, 24,
+        coeffs, &numBiquads, &hasFirstOrder, &firstOrderCoef);
+    ASSERT(!result, "cutoff at Nyquist rejected");
+
+    /* Cutoff above Nyquist must fail. */
+    result = ConfigLoader::precomputeCrossoverCoeffs(
+        25000.0f, 48000,
+        ConfigLoader::FILTER_LOWPASS,
+        ConfigLoader::TOPO_LR, 24,
+        coeffs, &numBiquads, &hasFirstOrder, &firstOrderCoef);
+    ASSERT(!result, "cutoff above Nyquist rejected");
+
+    std::printf("ok\n");
+}
+
+static void test_phase2_low_frequency_edge() {
+    std::printf("  P2: Low frequency edge... ");
+
+    float coeffs[20] = {};
+    uint32_t numBiquads = 0;
+    bool hasFirstOrder = false;
+    float firstOrderCoef = 0.f;
+
+    /* Very low cutoff (30Hz). */
+    bool result = ConfigLoader::precomputeCrossoverCoeffs(
+        30.0f, 48000,
+        ConfigLoader::FILTER_LOWPASS,
+        ConfigLoader::TOPO_BW, 24,
+        coeffs, &numBiquads, &hasFirstOrder, &firstOrderCoef);
+
+    ASSERT(result, "cutoff at 30Hz produces valid coefficients");
+    ASSERT(numBiquads == 2, "BW24 has 2 sections at low freq");
+
+    /* All coefficients finite. */
+    for (uint32_t i = 0; i < numBiquads * 5; ++i) {
+        ASSERT(!std::isnan(coeffs[i]) && !std::isinf(coeffs[i]), "coeff is finite at 30Hz");
+    }
+
+    std::printf("ok\n");
+}
+
+static void test_phase2_topology_roundtrip() {
+    std::printf("  P2: Topology roundtrip... ");
+
+    /* Precompute coefficients. */
+    float coeffs[20] = {};
+    uint32_t numBiquads = 0;
+    bool hasFirstOrder = false;
+    float firstOrderCoef = 0.f;
+
+    bool result = ConfigLoader::precomputeCrossoverCoeffs(
+        2500.0f, 48000,
+        ConfigLoader::FILTER_LOWPASS,
+        ConfigLoader::TOPO_LR, 24,
+        coeffs, &numBiquads, &hasFirstOrder, &firstOrderCoef);
+    ASSERT(result, "precompute succeeds");
+
+    /* Pack into binary format (simulating CrossoverCoeffs struct). */
+    uint8_t packed[256] = {};
+    uint8_t* p = packed;
+    *p++ = 0; /* filterType: lowpass */
+    *p++ = 0; /* topology: LR */
+    *p++ = static_cast<uint8_t>(numBiquads);
+    *p++ = static_cast<uint8_t>(hasFirstOrder ? 1 : 0);
+    std::memcpy(p, &firstOrderCoef, sizeof(float)); p += sizeof(float);
+    /* Pad to align biquad data. */
+    while ((p - packed) % 4 != 0) *p++ = 0;
+    for (uint32_t i = 0; i < numBiquads; ++i) {
+        std::memcpy(p, &coeffs[i * 5], 5 * sizeof(float));
+        p += 5 * sizeof(float);
+    }
+
+    /* Unpack and verify. */
+    p = packed;
+    uint8_t unpackType = *p++;
+    uint8_t unpackTopo = *p++;
+    uint8_t unpackNumBiq = *p++;
+    uint8_t unpackHasFO = *p++;
+    float unpackFoCoef;
+    std::memcpy(&unpackFoCoef, p, sizeof(float)); p += sizeof(float);
+    while ((p - packed) % 4 != 0) ++p;
+
+    ASSERT(unpackType == 0, "filter type preserved");
+    ASSERT(unpackTopo == 0, "topology preserved");
+    ASSERT(unpackNumBiq == numBiquads, "num biquads preserved");
+    ASSERT(unpackHasFO == (hasFirstOrder ? 1 : 0), "first-order flag preserved");
+    ASSERT(std::fabs(unpackFoCoef - firstOrderCoef) < 1e-6f, "first-order coef preserved");
+
+    /* Verify biquad coefficients match. */
+    float unpackedCoeffs[20] = {};
+    for (uint32_t i = 0; i < numBiquads; ++i) {
+        std::memcpy(&unpackedCoeffs[i * 5], p, 5 * sizeof(float));
+        p += 5 * sizeof(float);
+        for (int j = 0; j < 5; ++j) {
+            ASSERT(std::fabs(unpackedCoeffs[i * 5 + j] - coeffs[i * 5 + j]) < 1e-6f,
+                   "biquad coeff preserved in roundtrip");
+        }
+    }
+
+    std::printf("ok\n");
+}
+
+static void test_phase2_lr48_stability() {
+    std::printf("  P2: LR48 stability (4 biquads)... ");
+
+    float coeffs[20] = {};
+    uint32_t numBiquads = 0;
+    bool hasFirstOrder = false;
+    float firstOrderCoef = 0.f;
+
+    bool result = ConfigLoader::precomputeCrossoverCoeffs(
+        2500.0f, 48000,
+        ConfigLoader::FILTER_LOWPASS,
+        ConfigLoader::TOPO_LR, 48,
+        coeffs, &numBiquads, &hasFirstOrder, &firstOrderCoef);
+
+    ASSERT(result, "LR48 LP precompute succeeds");
+    ASSERT(numBiquads == 4, "LR48 has 4 biquad sections");
+    ASSERT(!hasFirstOrder, "LR48 has no first-order section");
+
+    /* All 4 sections must be stable. */
+    for (uint32_t i = 0; i < numBiquads; ++i) {
+        float a1 = coeffs[i * 5 + 3];
+        float a2 = coeffs[i * 5 + 4];
+        ASSERT(std::fabs(a2) < 1.0f, "section stable (|a2|<1)");
+        ASSERT(std::fabs(a1) < 1.0f + std::fabs(a2), "triangle inequality");
+    }
+
+    /* Simulate running through all sections with a unit sample to check for overflow. */
+    {
+        float x = 1.0f;
+        float states[8] = {}; /* d1,d2 per section × 4 sections */
+        for (uint32_t s = 0; s < numBiquads; ++s) {
+            float b0 = coeffs[s * 5 + 0];
+            float b1 = coeffs[s * 5 + 1];
+            float b2 = coeffs[s * 5 + 2];
+            float a1 = coeffs[s * 5 + 3];
+            float a2 = coeffs[s * 5 + 4];
+            /* Direct Form II Transposed single sample. */
+            float y = b0 * x + states[s * 2 + 0];
+            states[s * 2 + 0] = b1 * x + a1 * states[s * 2 + 0] - states[s * 2 + 1];
+            states[s * 2 + 1] = b2 * x + a1 * states[s * 2 + 0];
+            x = y;
+        }
+        ASSERT(!std::isnan(x) && !std::isinf(x), "cascade output is finite");
+        ASSERT(std::fabs(x) < 10.0f, "no excessive gain in cascade");
+    }
+
+    std::printf("ok\n");
+}
+
+static void test_phase2_all_slopes_valid() {
+    std::printf("  P2: All slopes valid... ");
+
+    int slopes[] = {12, 18, 24, 36, 48};
+    ConfigLoader::CrossoverTopology topologies[] = {
+        ConfigLoader::TOPO_LR, ConfigLoader::TOPO_BW, ConfigLoader::TOPO_BESEL
+    };
+
+    for (auto topo : topologies) {
+        for (int slope : slopes) {
+            float coeffs[20] = {};
+            uint32_t numBiquads = 0;
+            bool hasFirstOrder = false;
+            float firstOrderCoef = 0.f;
+
+            bool result = ConfigLoader::precomputeCrossoverCoeffs(
+                2500.0f, 48000,
+                ConfigLoader::FILTER_LOWPASS,
+                topo, slope,
+                coeffs, &numBiquads, &hasFirstOrder, &firstOrderCoef);
+
+            ASSERT(result, "all topology/slope combos produce valid coefficients");
+            ASSERT(numBiquads >= 1 && numBiquads <= 4, "biquad count in range [1,4]");
+
+            /* All coefficients finite. */
+            for (uint32_t i = 0; i < numBiquads * 5; ++i) {
+                ASSERT(!std::isnan(coeffs[i]) && !std::isinf(coeffs[i]),
+                       "all coefficients are finite");
+            }
+        }
+    }
+
+    std::printf("ok\n");
+}
+
+static void test_phase2_invalid_inputs() {
+    std::printf("  P2: Invalid inputs rejected... ");
+
+    float coeffs[20] = {};
+    uint32_t numBiquads = 0;
+    bool hasFirstOrder = false;
+    float firstOrderCoef = 0.f;
+
+    /* Zero cutoff. */
+    ASSERT(!ConfigLoader::precomputeCrossoverCoeffs(
+        0.0f, 48000, ConfigLoader::FILTER_LOWPASS,
+        ConfigLoader::TOPO_LR, 24, coeffs, &numBiquads, &hasFirstOrder, &firstOrderCoef),
+        "zero cutoff rejected");
+
+    /* Negative slope. */
+    ASSERT(!ConfigLoader::precomputeCrossoverCoeffs(
+        2500.0f, 48000, ConfigLoader::FILTER_LOWPASS,
+        ConfigLoader::TOPO_LR, -12, coeffs, &numBiquads, &hasFirstOrder, &firstOrderCoef),
+        "negative slope rejected");
+
+    /* Unsupported slope (6 dB/oct). */
+    ASSERT(!ConfigLoader::precomputeCrossoverCoeffs(
+        2500.0f, 48000, ConfigLoader::FILTER_LOWPASS,
+        ConfigLoader::TOPO_LR, 6, coeffs, &numBiquads, &hasFirstOrder, &firstOrderCoef),
+        "6dB/oct slope rejected");
+
+    /* Unsupported slope (60 dB/oct). */
+    ASSERT(!ConfigLoader::precomputeCrossoverCoeffs(
+        2500.0f, 48000, ConfigLoader::FILTER_LOWPASS,
+        ConfigLoader::TOPO_LR, 60, coeffs, &numBiquads, &hasFirstOrder, &firstOrderCoef),
+        "60dB/oct slope rejected");
+
+    /* Zero sample rate. */
+    ASSERT(!ConfigLoader::precomputeCrossoverCoeffs(
+        2500.0f, 0, ConfigLoader::FILTER_LOWPASS,
+        ConfigLoader::TOPO_LR, 24, coeffs, &numBiquads, &hasFirstOrder, &firstOrderCoef),
+        "zero sample rate rejected");
+
+    std::printf("ok\n");
+}
+
 int main() {
     std::printf("=== SHM/IPC/Config Tests (E1-E3) ===\n");
 
@@ -556,11 +943,24 @@ int main() {
     test_e3_biquad_precompute();
     test_e3_integration_shm_restart();
 
+    /* Phase 2: Crossover coefficient precomputation */
+    std::printf("\n=== Phase 2: Crossover Coefficients ===\n");
+    test_phase2_lr24_coefficients_valid();
+    test_phase2_bw12_coefficients_valid();
+    test_phase2_bessel24_coefficients_valid();
+    test_phase2_first_order_18db();
+    test_phase2_nyquist_boundary();
+    test_phase2_low_frequency_edge();
+    test_phase2_topology_roundtrip();
+    test_phase2_lr48_stability();
+    test_phase2_all_slopes_valid();
+    test_phase2_invalid_inputs();
+
     if (passed) {
-        std::printf("[PASS] All test_shm_ipc_config tests passed.\n");
+        std::printf("\n[PASS] All test_shm_ipc_config tests passed.\n");
         return 0;
     } else {
-        std::fprintf(stderr, "[FAIL] Some tests failed.\n");
+        std::fprintf(stderr, "\n[FAIL] Some tests failed.\n");
         return 1;
     }
 }

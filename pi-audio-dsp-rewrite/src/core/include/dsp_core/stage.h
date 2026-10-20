@@ -34,9 +34,11 @@ struct StageSet {
 
     /* Called in Engine::onBlock() before core.process(). */
     void swap() {
-        for (uint8_t i = 0; i < m_pendingCount; ++i)
-            m_active[i] = m_pending[i];
-        m_count = m_pendingCount;
-        m_pendingCount = 0;
+        if (m_pendingCount > 0) {
+            for (uint8_t i = 0; i < m_pendingCount; ++i)
+                m_active[i] = m_pending[i];
+            m_count = m_pendingCount;
+            m_pendingCount = 0;
+        }
     }
 };

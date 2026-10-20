@@ -43,7 +43,7 @@ const defaults = {
         { name: 'Woofer', delayMs: 0, trimDb: 0, phaseInverted: false },
         { name: 'Tweeter', delayMs: 0, trimDb: 0, phaseInverted: false },
     ],
-    limiter: { enabled: true, threshold: -1, release: 80 },
+    limiter: { enabled: true, threshold: -1, attack: 5, release: 80, ratio: 4 },
     monitorChannel: 'tweeter',
     measurement: null,
 };
@@ -269,10 +269,12 @@ function renderCrossovers() {
   $('#crossover-list').innerHTML = names.map((name) => {
     const crossover = ui.state.crossovers[name];
     const filterType = name === 'Woofer' ? 'LOW-PASS' : 'HIGH-PASS';
-    return `<article class="crossover-card">
-      <div class="crossover-card-head"><span>${filterType}</span><strong>${name}</strong></div>
+    return `<article class="crossover-card ${crossover.enabled ? '' : 'is-bypassed'}">
+      <div class="crossover-card-head"><span>${filterType}</span><strong>${name}</strong>
+        <label class="switch" title="${crossover.enabled ? 'Disable' : 'Enable'} crossover for ${name}"><input type="checkbox" data-crossover-enabled="${name}" ${crossover.enabled ? 'checked' : ''} aria-label="${crossover.enabled ? 'Disable' : 'Enable'} ${name} crossover"><span></span></label>
+      </div>
       <div class="crossover-card-fields">
-        <label class="field-label">FREQUENCY <input class="crossover-number" data-crossover-frequency="${name}" type="number" min="30" max="500" step="1" value="${crossover.frequency}" aria-label="${name} crossover frequency"> Hz</label>
+        <label class="field-label">FREQUENCY <input class="crossover-number" data-crossover-frequency="${name}" type="number" min="30" max="20000" step="1" value="${crossover.frequency}" aria-label="${name} crossover frequency"> Hz</label>
         <label class="field-label">TOPOLOGY <select class="select-control" data-crossover-topology="${name}">${['Linkwitz-Riley', 'Butterworth', 'Bessel'].map((t) => `<option value="${t}" ${crossover.topology === t ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
         <label class="field-label">SLOPE <select class="select-control" data-crossover-slope="${name}">${[12, 18, 24, 36, 48].map((slope) => `<option value="${slope}" ${crossover.slope === slope ? 'selected' : ''}>${slope} dB/oct</option>`).join('')}</select></label>
       </div>
@@ -367,7 +369,9 @@ function renderState(includePresets = true) {
   $('#mute-button').textContent = ui.state.muted ? 'Muted' : 'Mute';
   $('#limiter-enabled').checked = ui.state.limiter.enabled;
   $('#limiter-threshold').value = ui.state.limiter.threshold;
+  $('#limiter-attack').value = ui.state.limiter.attack;
   $('#limiter-release').value = ui.state.limiter.release;
+  $('#limiter-ratio').value = ui.state.limiter.ratio;
   $('#curve-caption').textContent = ui.state.measurement
     ? `MEASURED ${new Date(ui.state.measurement.measuredAt).toLocaleString()}`
     : '';
@@ -454,6 +458,7 @@ function drawCurve(driver, canvasId) {
     return db;
   };
   const filterResponse = (hz, crossover, lowPass) => {
+    if (!crossover.enabled) return 0; /* bypassed — flat pass-through */
     const ratio = lowPass ? hz / crossover.frequency : crossover.frequency / hz;
     const order = crossover.slope / 6;
     const power = Math.pow(ratio, order * (crossover.topology === 'Linkwitz-Riley' ? 1 : 2));
@@ -1007,12 +1012,14 @@ function bindEvents() {
     queueSave();
   });
   $('#crossover-list').addEventListener('change', (event) => {
-    const field = event.target;
-    const name = field.dataset.crossoverFrequency || field.dataset.crossoverSlope || field.dataset.crossoverTopology;
+    const target = event.target.closest('[data-crossover-enabled], [data-crossover-frequency], [data-crossover-topology], [data-crossover-slope]');
+    if (!target) return;
+    const name = target.dataset.crossoverEnabled || target.dataset.crossoverFrequency || target.dataset.crossoverTopology || target.dataset.crossoverSlope;
     if (!name || !ui.state.crossovers[name]) return;
-    if (field.dataset.crossoverFrequency) ui.state.crossovers[name].frequency = Number(field.value);
-    if (field.dataset.crossoverSlope) ui.state.crossovers[name].slope = Number(field.value);
-    if (field.dataset.crossoverTopology) ui.state.crossovers[name].topology = field.value;
+    if (target.dataset.crossoverEnabled) ui.state.crossovers[name].enabled = target.checked;
+    if (target.dataset.crossoverFrequency) ui.state.crossovers[name].frequency = Number(target.value);
+    if (target.dataset.crossoverSlope) ui.state.crossovers[name].slope = Number(target.value);
+    if (target.dataset.crossoverTopology) ui.state.crossovers[name].topology = target.value;
     queueSave();
   });
   document.querySelectorAll('[data-collapse]').forEach((button) => button.addEventListener('click', () => {
@@ -1021,11 +1028,13 @@ function bindEvents() {
     renderCollapseState();
     if (section === 'peq') drawCurves();
   }));
-  ['limiter-enabled', 'limiter-threshold', 'limiter-release'].forEach((id) => {
+  ['limiter-enabled', 'limiter-threshold', 'limiter-attack', 'limiter-release', 'limiter-ratio'].forEach((id) => {
     $(`#${id}`).addEventListener('change', (event) => {
       if (id === 'limiter-enabled') ui.state.limiter.enabled = event.target.checked;
       if (id === 'limiter-threshold') ui.state.limiter.threshold = Number(event.target.value);
+      if (id === 'limiter-attack') ui.state.limiter.attack = Number(event.target.value);
       if (id === 'limiter-release') ui.state.limiter.release = Number(event.target.value);
+      if (id === 'limiter-ratio') ui.state.limiter.ratio = Number(event.target.value);
       queueSave();
     });
   });

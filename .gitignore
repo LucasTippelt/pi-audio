@@ -31,3 +31,4 @@ Thumbs.db
 
 # Logs (repo-wide, not just pi-audio-dsp/)
 *.log
+Testing/Temporary/CTestCostData.txt

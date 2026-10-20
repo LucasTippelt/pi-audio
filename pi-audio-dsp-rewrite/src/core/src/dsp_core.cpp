@@ -8,7 +8,6 @@
 #include "msg/telemetry.h"
 
 #include <cmath>
-#include <cstdio>
 #include <cstring>
 
 bool DspCore::init(uint32_t sampleRate, uint32_t maxBlockSize,
@@ -51,8 +50,8 @@ void DspCore::process(float* const in[], uint32_t numInCh,
         std::memset(out[ch], 0, frames * sizeof(float));
     }
 
-    /* C1: Test mode generates white noise instead of copying inputs.
-     * Noise flows through all stage chains so GainStage applies volume/mute. */
+    /* C1: Test mode generates signals instead of normal PGM routing.
+     * All test modes flow through stage chains (crossover, limiter, master gain). */
     if (m_testMode != 0) {
         switch (m_testMode) {
             case 1: { /* Woofer — noise on channel 0 only */
@@ -69,15 +68,16 @@ void DspCore::process(float* const in[], uint32_t numInCh,
                 }
                 break;
             }
-            case 3: { /* PGM monitoring — pass PGM_L through to both outputs, no DSP */
-                if (m_routing.pgmLIndex < numInCh && numOutCh >= 2) {
-                    const float* pgm = in[m_routing.pgmLIndex];
-                    std::memcpy(out[0], pgm, frames * sizeof(float));
-                    std::memcpy(out[1], pgm, frames * sizeof(float));
-                } else if (numInCh >= 2 && numOutCh >= 2) {
-                    /* Fallback: use input 0 as PGM_L */
-                    std::memcpy(out[0], in[0], frames * sizeof(float));
-                    std::memcpy(out[1], in[0], frames * sizeof(float));
+            case 3: { /* PGM Test — generate LCG white noise on BOTH outputs (Woofer + Tweeter).
+                        * Signal flows through full stage chains: crossover, limiter, master gain.
+                        * Self-contained: does not depend on hardware input being connected. */
+                if (numOutCh >= 2) {
+                    for (uint32_t f = 0; f < frames; ++f) {
+                        m_testNoiseSeed = m_testNoiseSeed * 1664525u + 1013904223u;
+                        float sample = static_cast<float>((m_testNoiseSeed >> 16) & 0xFFFF) / 65536.0f * 0.6f - 0.3f;
+                        out[0][f] = sample;
+                        out[1][f] = sample;
+                    }
                 }
                 break;
             }
@@ -112,21 +112,8 @@ void DspCore::process(float* const in[], uint32_t numInCh,
         }
     }
 
-    /* Diagnostic: measure pre-chain peak levels when in test mode. */
-    float prePeak[2] = {0.f, 0.f};
-    static int lastDiagTestMode = 0;
-    if (m_testMode != 0) {
-        for (uint32_t ch = 0; ch < numOutCh && ch < 2; ++ch) {
-            for (uint32_t f = 0; f < frames; ++f) {
-                float v = out[ch][f];
-                if (v < 0.f) v = -v;
-                if (v > prePeak[ch]) prePeak[ch] = v;
-            }
-        }
-    }
-
     /* Run stage chains — EQ, crossover, limiter etc. per output channel.
-     * Each chain processes only its designated channel to avoid double-processing. */
+      * Each chain processes only its designated channel to avoid double-processing. */
     for (int c = 0; c < 2; ++c) {
         if (c >= (int)numOutCh) break;
         StageSet& chain = m_chains[c];
@@ -140,30 +127,6 @@ void DspCore::process(float* const in[], uint32_t numInCh,
     /* Master gain/mute — applied ONCE to all output channels after chains. */
     if (m_masterGain) {
         m_masterGain->process(out, numOutCh, frames, info);
-    }
-
-    /* Diagnostic: log signal path on test mode transition and periodically. */
-    static uint32_t diagCounter = 0;
-    bool diagTime = false;
-    if (m_testMode != 0) {
-        ++diagCounter;
-        if (lastDiagTestMode == 0 || diagCounter % 100 == 0) diagTime = true;
-    }
-    lastDiagTestMode = m_testMode;
-    if (diagTime) {
-        float postPeak[2] = {0.f, 0.f};
-        for (uint32_t ch = 0; ch < numOutCh && ch < 2; ++ch) {
-            for (uint32_t f = 0; f < frames; ++f) {
-                float v = out[ch][f];
-                if (v < 0.f) v = -v;
-                if (v > postPeak[ch]) postPeak[ch] = v;
-            }
-        }
-#ifdef PI_AUDIO_DIAG_LOG
-        { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
-          if (df) { std::fprintf(df, "[dsp] testMode=%u pre=[%.4f %.4f] post=[%.4f %.4f]\n",
-                    m_testMode, prePeak[0], prePeak[1], postPeak[0], postPeak[1]); std::fclose(df); } }
-#endif
     }
 
     /* B6: React to clock-state changes. */
@@ -190,7 +153,6 @@ void DspCore::process(float* const in[], uint32_t numInCh,
      * Attack: instant (level rises to block RMS immediately).
      * Decay: 0.95/block (~100ms at 48kHz/512) so StateWriter always sees
      * a representative level, not a single-block snapshot. */
-    float telPeak[2] = {0.f, 0.f};
     for (uint32_t ch = 0; ch < numOutCh && ch < 2; ++ch) {
         /* Compute block RMS. */
         float sumSq = 0.f;
@@ -199,15 +161,6 @@ void DspCore::process(float* const in[], uint32_t numInCh,
             sumSq += v * v;
         }
         float rms = std::sqrt(sumSq / static_cast<float>(frames));
-
-        /* Also track peak for diagnostics. */
-        float peak = 0.f;
-        for (uint32_t f = 0; f < frames; ++f) {
-            float v = out[ch][f];
-            if (v < 0.f) v = -v;
-            if (v > peak) peak = v;
-        }
-        telPeak[ch] = peak;
 
         /* Persistent level: attack instantly, decay slowly. */
         if (rms > m_meterLevel[ch]) {
@@ -221,15 +174,6 @@ void DspCore::process(float* const in[], uint32_t numInCh,
         if (db < -96.f) db = -96.f; /* clamp to noise floor */
         m_telemetryCache.outputLevelDb[ch] = db;
     }
-
-#ifdef PI_AUDIO_DIAG_LOG
-    /* Diagnostic: log telemetry meter peaks and persistent levels during test mode. */
-    if (m_testMode != 0 && diagTime) {
-        FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
-        if (df) { std::fprintf(df, "[tel] telPeak=[%.6f %.6f] meterLevel=[%.6f %.6f] clockState=%u\n",
-                  telPeak[0], telPeak[1], m_meterLevel[0], m_meterLevel[1], info.clockState); std::fclose(df); }
-    }
-#endif
 
     /* Peak meter for input channels. */
     uint32_t meterCh = (numInCh < 8) ? numInCh : 8;

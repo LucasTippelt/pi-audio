@@ -79,6 +79,7 @@ export function normalizeState(source: Record<string, unknown>, previous?: Confi
       const cross = isPlainObject(sourceCrossovers[name]) ? sourceCrossovers[name] : {};
       const fallback = base.crossovers[name] ?? defaults;
       out.crossovers[name] = {
+        enabled: Boolean((cross.enabled as boolean) ?? fallback.enabled),
         frequency: clamp(Math.round((cross.frequency as number) ?? fallback.frequency), 30, 20000),
         topology: inArray(VALID_TOPOLOGIES, cross.topology as string)
           ? (cross.topology as any) : fallback.topology,
@@ -139,7 +140,9 @@ export function normalizeState(source: Record<string, unknown>, previous?: Confi
   out.limiter = {
     enabled: Boolean((limiter.enabled as boolean) ?? true),
     threshold: roundTo(clamp(Number(limiter.threshold ?? -1), -24, 0), 1),
+    attack: roundTo(clamp(Number(limiter.attack ?? 5), 0.1, 100), 1),
     release: clamp(Math.round((limiter.release as number) ?? 80), 10, 2000),
+    ratio: roundTo(clamp(Number(limiter.ratio ?? 4), 1, 20), 1),
   };
 
   out.measurement = null;

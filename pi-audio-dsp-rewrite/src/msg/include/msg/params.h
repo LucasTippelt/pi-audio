@@ -18,6 +18,7 @@ enum StageParamType : uint16_t {
     STAGE_PARAM_CROSSOVER = 3,
     STAGE_PARAM_DELAY     = 4,
     STAGE_PARAM_TRIM      = 5,
+    STAGE_PARAM_LIMITER   = 6,
 };
 
 struct StageParamEntry {

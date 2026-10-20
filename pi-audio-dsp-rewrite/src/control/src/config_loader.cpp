@@ -71,6 +71,37 @@ bool ConfigLoader::jsonGetInt(const char* json, size_t len, const char* key, int
     return true;
 }
 
+/* Parse a JSON boolean value: handles "true", "false" literals AND numeric 0/1. */
+static bool jsonGetBool(const char* json, size_t len, const char* key, bool* out) {
+    const char* val = jsonFindKey(json, len, key);
+    if (!val) return false;
+    skipWhitespace(val);
+    if (strncmp(val, "null", 4) == 0) return false;
+
+    /* Handle JSON boolean literals. */
+    if (strncmp(val, "true", 4) == 0) {
+        *out = true;
+        return true;
+    }
+    if (strncmp(val, "false", 5) == 0) {
+        *out = false;
+        return true;
+    }
+
+    /* Fall back to numeric: 0 = false, non-zero = true. */
+    if (*val == '[') {
+        ++val;
+        skipWhitespace(val);
+    }
+    char* end = nullptr;
+    long long ll = strtoll(val, &end, 10);
+    if (end != val) {
+        *out = (ll != 0);
+        return true;
+    }
+    return false;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Parse JSON array of objects for bands/drivers/measurement points. */
 /* ------------------------------------------------------------------ */
@@ -332,15 +363,19 @@ bool ConfigLoader::parseJson(const char* json, size_t len, FullConfig& cfg) {
                 size_t objLen = objStr.size();
 
                 float delayMs = 0, trimDb = 0;
-                int64_t phaseInv = 0;
+                bool phaseInv = false;
 
                 { float tmp; if (jsonGetFloat(objStr.c_str(), objLen, "delayMs", &tmp)) delayMs = tmp; }
                 { float tmp; if (jsonGetFloat(objStr.c_str(), objLen, "trimDb", &tmp)) trimDb = tmp; }
-                { int64_t tmp; if (jsonGetInt(objStr.c_str(), objLen, "phaseInvert", &tmp)) phaseInv = tmp; }
+                /* Try both field names: WebUI uses 'phaseInverted' (boolean), legacy used 'phaseInvert' (int). */
+                if (!jsonGetBool(objStr.c_str(), objLen, "phaseInverted", &phaseInv)) {
+                    int64_t tmp = 0;
+                    if (jsonGetInt(objStr.c_str(), objLen, "phaseInvert", &tmp)) phaseInv = (tmp != 0);
+                }
 
                 cfg.drivers[i].delayMs     = delayMs;
                 cfg.drivers[i].trimDb      = trimDb;
-                cfg.drivers[i].phaseInvert = static_cast<uint8_t>(phaseInv != 0 ? 1 : 0);
+                cfg.drivers[i].phaseInvert = static_cast<uint8_t>(phaseInv ? 1 : 0);
 
                 /* Extract name string. */
                 {
@@ -370,15 +405,33 @@ bool ConfigLoader::parseJson(const char* json, size_t len, FullConfig& cfg) {
     /* --- Limiter. --- */
     {
         bool enabled = false;
-        int64_t enVal = 0;
-        jsonGetInt(json, len, "limiterEnabled", &enVal);
-        enabled = (enVal != 0);
-
         float thresholdDb = -1.0f, attackMs = 5.0f, releaseMs = 100.0f, ratio = 4.0f;
-        { float tmp; if (jsonGetFloat(json, len, "limiterThresholdDb", &tmp)) thresholdDb = tmp; }
-        { float tmp; if (jsonGetFloat(json, len, "limiterAttackMs", &tmp)) attackMs = tmp; }
-        { float tmp; if (jsonGetFloat(json, len, "limiterReleaseMs", &tmp)) releaseMs = tmp; }
-        { float tmp; if (jsonGetFloat(json, len, "limiterRatio", &tmp)) ratio = tmp; }
+
+        /* Try nested WebUI format: limiter: { enabled, threshold, attack, release, ratio } */
+        const char* limObj = jsonFindKey(json, len, "limiter");
+        if (limObj) {
+            skipWhitespace(limObj);
+            if (*limObj == '{') {
+                const char* objStart = limObj;
+                int depth = 1;
+                ++limObj;
+                while (*limObj && depth > 0) {
+                    if (*limObj == '{') ++depth;
+                    else if (*limObj == '}') --depth;
+                    ++limObj;
+                }
+
+                std::string objStr(objStart, limObj - objStart);
+                size_t objLen = objStr.size();
+
+                bool enVal = false;
+                if (jsonGetBool(objStr.c_str(), objLen, "enabled", &enVal)) enabled = enVal;
+                { float tmp; if (jsonGetFloat(objStr.c_str(), objLen, "threshold", &tmp)) thresholdDb = tmp; }
+                { float tmp; if (jsonGetFloat(objStr.c_str(), objLen, "attack", &tmp)) attackMs = tmp; }
+                { float tmp; if (jsonGetFloat(objStr.c_str(), objLen, "release", &tmp)) releaseMs = tmp; }
+                { float tmp; if (jsonGetFloat(objStr.c_str(), objLen, "ratio", &tmp)) ratio = tmp; }
+            }
+        }
 
         cfg.limiterEnabled      = enabled;
         cfg.limiterThresholdDb  = thresholdDb;
@@ -421,6 +474,91 @@ bool ConfigLoader::parseJson(const char* json, size_t len, FullConfig& cfg) {
 
                 skipWhitespace(p);
                 if (*p == ',') ++p;
+            }
+        }
+    }
+
+    /* --- P4: Crossover configuration. --- */
+    {
+        const char* cxObj = jsonFindKey(json, len, "crossovers");
+        if (cxObj) {
+            skipWhitespace(cxObj);
+            if (*cxObj == '{') {
+                /* Find the closing brace of the crossovers object. */
+                const char* objStart = cxObj;
+                int depth = 1;
+                ++cxObj;
+                while (*cxObj && depth > 0) {
+                    if (*cxObj == '{') ++depth;
+                    else if (*cxObj == '}') --depth;
+                    ++cxObj;
+                }
+
+                /* Parse Woofer and Tweeter sub-objects. */
+                auto parseCrossoverSlot = [&](const char* slotName, FullConfig::CrossoverConfig& out) -> void {
+                    out.enabled = false;
+                    out.frequencyHz = 2500.f;
+                    out.slopeDbOct = 24;
+                    std::strncpy(out.topologyName, "Linkwitz-Riley", sizeof(out.topologyName) - 1);
+                    out.topologyName[sizeof(out.topologyName) - 1] = '\0';
+
+                    char pattern[64];
+                    snprintf(pattern, sizeof(pattern), "\"%s\"", slotName);
+                    const char* slot = strstr(static_cast<const char*>(objStart), pattern);
+                    if (!slot) return;
+                    slot += strlen(pattern);
+                    skipWhitespace(slot);
+                    if (*slot == ':') ++slot;
+                    skipWhitespace(slot);
+                    if (*slot != '{') return;
+
+                    const char* slotStart = slot;
+                    int sdepth = 1;
+                    ++slot;
+                    while (*slot && sdepth > 0) {
+                        if (*slot == '{') ++sdepth;
+                        else if (*slot == '}') --sdepth;
+                        ++slot;
+                    }
+
+                    std::string slotStr(slotStart, slot - slotStart);
+                    size_t slen = slotStr.size();
+
+                    float freq = 0;
+                     int64_t slope = 24;
+                     bool enVal = true; /* default: enabled when frequency > 0 */
+                     bool enPresent = false; /* track if 'enabled' field was present */
+                     { float tmp; if (jsonGetFloat(slotStr.c_str(), slen, "frequency", &tmp)) freq = tmp; }
+                     if (jsonGetInt(slotStr.c_str(), slen, "slope", &slope)) out.slopeDbOct = static_cast<int>(slope);
+                     enPresent = jsonGetBool(slotStr.c_str(), slen, "enabled", &enVal);
+
+                      /* Parse topology string. */
+                     {
+                         const char* val = jsonFindKey(slotStr.c_str(), slen, "topology");
+                         if (val) {
+                             skipWhitespace(val);
+                             if (*val == '"') {
+                                 ++val;
+                                 const char* eq = strchr(val, '"');
+                                 if (eq) {
+                                     size_t nlen = eq - val;
+                                     if (nlen >= sizeof(out.topologyName)) nlen = sizeof(out.topologyName) - 1;
+                                     std::memcpy(out.topologyName, val, nlen);
+                                     out.topologyName[nlen] = '\0';
+                                 }
+                             }
+                         }
+                     }
+
+                    if (freq > 0) {
+                          out.frequencyHz = freq;
+                          /* Use explicit 'enabled' field if present, otherwise derive from frequency. */
+                          out.enabled = enPresent ? enVal : true;
+                      }
+                };
+
+                parseCrossoverSlot("Woofer", cfg.crossoverWoofer);
+                parseCrossoverSlot("Tweeter", cfg.crossoverTweeter);
             }
         }
     }
@@ -547,12 +685,83 @@ bool ConfigLoader::load(const char* jsonPath, CmdLoadParams& outParams) {
                        &delaySamples, sizeof(delaySamples))) break;
     }
 
-    /* Pack trim entries. */
+    /* Pack trim entries. Phase invert encoded as negative gain sign. */
     for (uint32_t i = 0; i < cfg.driverCount; ++i) {
         float linearGain = dbToLinear(cfg.drivers[i].trimDb);
+        if (cfg.drivers[i].phaseInvert) linearGain = -linearGain;
         if (!packEntry(STAGE_PARAM_TRIM, static_cast<uint16_t>(i),
-                       &linearGain, sizeof(linearGain))) break;
+                        &linearGain, sizeof(linearGain))) break;
     }
+
+    /* Pack limiter entry (global, applied to both chains).
+     * Always sent — when disabled, thresholdDb=999 acts as a sentinel so the
+     * engine resets the limiter to pass-through defaults instead of keeping
+     * stale parameters from a previous enable. */
+    {
+        float limiterData[4];
+        if (cfg.limiterEnabled) {
+            limiterData[0] = cfg.limiterThresholdDb;
+            limiterData[1] = cfg.limiterAttackMs;
+            limiterData[2] = cfg.limiterReleaseMs;
+            limiterData[3] = cfg.limiterRatio;
+        } else {
+            /* Sentinel: threshold >= 999 dB signals engine to disable limiter. */
+            limiterData[0] = 999.f;
+            limiterData[1] = 0.f;
+            limiterData[2] = 0.f;
+            limiterData[3] = 1.f;
+        }
+        if (!packEntry(STAGE_PARAM_LIMITER, 0, limiterData, sizeof(limiterData))) return false;
+    }
+
+    /* P4: Pack crossover coefficient entries. */
+    auto packCrossover = [&](const FullConfig::CrossoverConfig& cx, uint16_t slot) -> bool {
+        if (!cx.enabled) {
+            /* Send zero-length entry as disable signal (engine calls CrossoverStage::disable()). */
+            return packEntry(STAGE_PARAM_CROSSOVER, slot, nullptr, 0);
+        }
+
+        /* Map topology name to enum. */
+        CrossoverTopology topo = TOPO_LR;
+        if (std::strncmp(cx.topologyName, "Butterworth", 32) == 0) topo = TOPO_BW;
+        else if (std::strncmp(cx.topologyName, "Bessel", 32) == 0) topo = TOPO_BESEL;
+
+        /* Determine filter type: woofer=LP (slot 0), tweeter=HP (slot 1). */
+        FilterType ftype = (slot == 0) ? FILTER_LOWPASS : FILTER_HIGHPASS;
+
+        /* Precompute coefficients. */
+        float coeffs[20]; /* max 4 biquads × 5 floats */
+        uint32_t numBq = 0;
+        bool hasFO = false;
+        float foCoef = 0.f;
+
+        if (!precomputeCrossoverCoeffs(cx.frequencyHz, cfg.sampleRate,
+                                       ftype, topo, cx.slopeDbOct,
+                                       coeffs, &numBq, &hasFO, &foCoef)) {
+            return true; /* skip on failure — not fatal */
+        }
+
+        /* Build CrossoverCoeffs binary block. */
+        uint8_t block[256];
+        std::memset(block, 0, sizeof(block));
+
+        block[0] = static_cast<uint8_t>(ftype);       /* filterType */
+        block[1] = static_cast<uint8_t>(topo);         /* topology */
+        block[2] = static_cast<uint8_t>(numBq);        /* numBiquads */
+        block[3] = hasFO ? 1u : 0u;                    /* hasFirstOrder */
+        std::memcpy(&block[5], &foCoef, sizeof(float));/* firstOrderCoef at offset 5 */
+
+        /* Biquad sections start at offset 10. */
+        std::memcpy(&block[10], coeffs, numBq * 5 * sizeof(float));
+
+        size_t blockSize = 10 + numBq * 5 * sizeof(float);
+        if (hasFO) blockSize = std::max(blockSize, size_t(10u));
+
+        return packEntry(STAGE_PARAM_CROSSOVER, slot, block, blockSize);
+    };
+
+    if (!packCrossover(cfg.crossoverWoofer, 0)) return false;
+    if (!packCrossover(cfg.crossoverTweeter, 1)) return false;
 
     outParams.payloadSize = static_cast<uint32_t>(ptr - outParams.payload);
     return true;
@@ -682,6 +891,174 @@ bool ConfigLoader::precomputeBiquadCoeffs(float cutoffHz, float sampleRate,
     return true;
 }
 
+/* ------------------------------------------------------------------ */
+/*  Crossover coefficient precomputation (Phase 2)                    */
+/*  Control plane only — DSP core receives precomputed float32.       */
+/* ------------------------------------------------------------------ */
+
+/* Compute one biquad section using RBJ Audio EQ Cookbook formulas.
+ * Lowpass and Highpass variants with quality factor Q.               */
+static bool computeBiquadSection(float cutoffHz, float sampleRate,
+                                  ConfigLoader::FilterType type, float q,
+                                  float* b0, float* b1, float* b2,
+                                  float* a1, float* a2) {
+    if (cutoffHz <= 0 || cutoffHz >= sampleRate / 2.0f ||
+        sampleRate <= 0 || q <= 0)
+        return false;
+
+    const float pi = 3.14159265358979323846f;
+    float wc = 2.0f * pi * cutoffHz / sampleRate;
+    float cosWc = std::cosf(wc);
+    float sinWc = std::sinf(wc);
+
+    float alpha = sinWc / (2.0f * q);
+
+    float b0Val, b1Val, b2Val;
+    if (type == ConfigLoader::FILTER_LOWPASS) {
+        b0Val  = (1.0f - cosWc) / 2.0f;
+        b1Val  = 1.0f - cosWc;
+        b2Val  = (1.0f - cosWc) / 2.0f;
+    } else {
+        b0Val  = (1.0f + cosWc) / 2.0f;
+        b1Val  = -(1.0f + cosWc);
+        b2Val  = (1.0f + cosWc) / 2.0f;
+    }
+
+    float a0   = 1.0f + alpha;
+    float a1Val = -2.0f * cosWc;
+    float a2Val = 1.0f - alpha;
+
+    if (std::fabs(a0) < 1e-12f) return false;
+
+    *b0 = b0Val / a0;
+    *b1 = b1Val / a0;
+    *b2 = b2Val / a0;
+    *a1 = a1Val / a0;
+    *a2 = a2Val / a0;
+
+    /* Stability: triangle inequalities for denominator. */
+    if (std::fabs(*a2) >= 1.0f) return false;
+    if (std::fabs(*a1) >= 1.0f + std::fabs(*a2)) return false;
+
+    /* NaN / Inf guard. */
+    if (std::isnan(*b0) || std::isinf(*b0)) return false;
+    if (std::isnan(*a1) || std::isinf(*a1)) return false;
+
+    return true;
+}
+
+/* First-order section coefficient with bilinear transform and prewarping.
+ * Returns alpha for:
+ *   Lowpass : y[n] = alpha*x[n] + (1-alpha)*y[n-1]
+ *   Highpass: y[n] = y[n-1] + alpha*(x[n] - x[n-1])                    */
+static float computeFirstOrderCoef(float cutoffHz, float sampleRate) {
+    const float pi = 3.14159265358979323846f;
+    float tanVal = std::tanf(pi * cutoffHz / sampleRate);
+    return tanVal / (1.0f + tanVal);
+}
+
+bool ConfigLoader::precomputeCrossoverCoeffs(
+    float cutoffHz, uint32_t sampleRate,
+    FilterType type, CrossoverTopology topology, int slopeDbOct,
+    float coeffs[], uint32_t* numBiquadsOut, bool* hasFirstOrderOut,
+    float* firstOrderCoefOut) {
+
+    if (cutoffHz <= 0 || cutoffHz >= static_cast<float>(sampleRate) / 2.0f ||
+        sampleRate == 0)
+        return false;
+    if (slopeDbOct < 12 || slopeDbOct > 48 || slopeDbOct % 6 != 0)
+        return false;
+
+    /* Determine section topology from slope. */
+    uint8_t numBiquads = 0;
+    bool hasFirstOrder = false;
+
+    switch (slopeDbOct) {
+        case 12: numBiquads = 1; hasFirstOrder = false; break;
+        case 18: numBiquads = 1; hasFirstOrder = true;  break;
+        case 24: numBiquads = 2; hasFirstOrder = false; break;
+        case 36: numBiquads = 2; hasFirstOrder = true;  break;
+        case 48: numBiquads = 4; hasFirstOrder = false; break;
+        default: return false;
+    }
+
+    /* Q-value tables per topology and slope.
+     * Butterworth: standard analog prototype poles.
+     * Linkwitz-Riley: squared Butterworth (LR2N = BW^N).
+     * Bessel: Thiele approximation for flat group delay.          */
+    float qValues[4] = {};
+
+    switch (topology) {
+        case TOPO_BW:
+            switch (slopeDbOct) {
+                case 12: qValues[0] = 0.7071f; break;
+                case 18: qValues[0] = 1.0f; break;
+                case 24: qValues[0] = 0.5412f; qValues[1] = 1.3066f; break;
+                case 36: qValues[0] = 0.6180f; qValues[1] = 1.6180f; break;
+                case 48:
+                    qValues[0] = 0.3827f; qValues[1] = 0.4142f;
+                    qValues[2] = 0.6013f; qValues[3] = 2.5629f; break;
+            }
+            break;
+
+        case TOPO_LR: {
+            /* LR is formed by cascading identical Butterworth sections.
+             * LR4 (24dB) = BW2^2 → two identical Q=0.7071 sections.
+             * LR8 (48dB) = BW4^2 → each BW4 section repeated twice.  */
+            switch (slopeDbOct) {
+                case 12: qValues[0] = 0.7071f; break;
+                case 18: qValues[0] = 0.7071f; break;
+                case 24: qValues[0] = 0.7071f; qValues[1] = 0.7071f; break;
+                case 36: qValues[0] = 0.7071f; qValues[1] = 0.7071f; break;
+                case 48:
+                    qValues[0] = 0.5412f; qValues[1] = 1.3066f;
+                    qValues[2] = 0.5412f; qValues[3] = 1.3066f; break;
+            }
+            break;
+        }
+
+        case TOPO_BESEL: {
+            /* Thiele-normalized Bessel Q values (-3dB at cutoff). */
+            switch (slopeDbOct) {
+                case 12: qValues[0] = 0.5774f; break;
+                case 18: qValues[0] = 1.0f; break;
+                case 24: qValues[0] = 0.4169f; qValues[1] = 1.3819f; break;
+                case 36: qValues[0] = 0.5774f; qValues[1] = 1.7321f; break;
+                case 48:
+                    qValues[0] = 0.3690f; qValues[1] = 0.4710f;
+                    qValues[2] = 0.7250f; qValues[3] = 3.5500f; break;
+            }
+            break;
+        }
+    }
+
+    /* Compute biquad coefficients for each section. */
+    for (uint8_t i = 0; i < numBiquads; ++i) {
+        float b0, b1, b2, a1, a2;
+        if (!computeBiquadSection(cutoffHz, sampleRate, type, qValues[i],
+                                  &b0, &b1, &b2, &a1, &a2)) {
+            return false;
+        }
+        coeffs[i * 5 + 0] = b0;
+        coeffs[i * 5 + 1] = b1;
+        coeffs[i * 5 + 2] = b2;
+        coeffs[i * 5 + 3] = a1;
+        coeffs[i * 5 + 4] = a2;
+    }
+
+    /* First-order section for odd slopes. */
+    if (hasFirstOrder) {
+        *firstOrderCoefOut = computeFirstOrderCoef(cutoffHz, sampleRate);
+    } else {
+        *firstOrderCoefOut = 0.0f;
+    }
+
+    *numBiquadsOut = numBiquads;
+    *hasFirstOrderOut = hasFirstOrder;
+
+    return true;
+}
+
 float ConfigLoader::dbToLinear(float db) {
     return std::expf(db * 0.1151292546497023f); /* ln(10)/20 */
 }
@@ -794,4 +1171,9 @@ uint32_t ConfigLoader::extractBufferSize(const char* json, size_t len) {
     if (val < 32 || val > 4096) return 0;
     if ((val & (val - 1)) != 0) return 0;
     return static_cast<uint32_t>(val);
+}
+
+bool ConfigLoader::parseFullConfig(const char* json, size_t len, FullConfig& cfg) {
+    ConfigLoader loader;
+    return loader.parseJson(json, len, cfg);
 }

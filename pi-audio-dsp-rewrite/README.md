@@ -120,8 +120,13 @@ pi-audio-dsp-rewrite/
 │   │       ├── fractional_resampler.cpp # Kaiser-windowed sinc coefficients, history ring
 │   │       ├── routing.cpp            # Channel mixing utility
 │   │       └── stages/
-│   │           ├── gain_stage.{h,cpp} # Per-channel gain with 64-sample ramp (click-free)
-│   │           └── null_stage.h       # No-op stage for cycle budget measurement
+│   │           ├── biquad_stage.{h,cpp}     # Single biquad filter, Direct Form II Transposed
+│   │           ├── crossover_stage.{h,cpp}  # Cascaded biquads + optional first-order section
+│   │           ├── delay_stage.{h,cpp}      # Circular buffer delay line (max 32768 samples)
+│   │           ├── gain_stage.{h,cpp}       # Per-channel gain with 64-sample ramp (click-free)
+│   │           ├── limiter_stage.{h,cpp}    # Peak limiter with attack/release envelope follower
+│   │           ├── null_stage.h             # No-op stage for cycle budget measurement
+│   │           └── trim_stage.{h,cpp}       # Fixed linear gain + phase inversion
 │   ├── hal/                            # Hardware Abstraction Layer
 │   │   ├── include/hal/
 │   │   │   ├── alsa_hal.h             # ALSA-based HAL (Linux)
@@ -175,6 +180,7 @@ Full ALSA implementation with real-time optimizations:
 - **Non-blocking independent streams** (`SND_PCM_NONBLOCK`) — capture and playback operate independently without `snd_pcm_link()`. Required for ASYNC USB audio interfaces (e.g., Steinberg UR12) where linked streams cause continuous XRUN on capture because the USB packet interval (125μs) doesn't align with buffer read timing.
 - **S32_LE interleaved format** — hardware-native integer format for UR12 and similar devices. Float↔int32 conversion done in DSP loop with clamping to [-1.0, 1.0] range before writei.
 - **Availability-based pacing**: `snd_pcm_avail_update()` checks buffer availability before each read/write instead of blocking I/O. Capture waits for sufficient data; playback skips output when buffer is full (prevents underrun on ASYNC USB endpoints).
+- **Dual-stream readiness gate** — before DSP processing, the loop waits until BOTH capture has data AND playback has space (`availCap >= bufferSize` and `availPlay >= bufferSize`). On ASYNC USB devices with separate streams, running ahead of the playback clock causes buffer fills and dropped blocks (playSKIP) at block rate (~93 Hz for 48kHz/512), producing rhythmic crackling. The gate prevents producing a block that cannot be delivered. Wait loop uses 100μs steps up to 50ms timeout; on timeout, falls through with silence to keep telemetry flowing.
 - **Stream activation**: capture warms up with retrying blocking reads (~100ms USB device startup delay); playback activated via silence write during initialization.
 - **RT scheduling**: `SCHED_FIFO` at priority 75 with CPU affinity pinning (`setCoreMask()`)
 - **Memory locking** via `mlockall(MCL_CURRENT)` — locks existing pages only (NOT `MCL_FUTURE` which exhausts the locked memory limit and causes EAGAIN on `pthread_create`)
@@ -189,6 +195,7 @@ USB audio interfaces with ASYNC endpoints (no implicit feedback) require special
 - **Larger buffers**: Use `--buffer 512` or higher for USB packet timing slack (default 128 is too small for ASYNC devices)
 - **Non-blocking I/O**: Blocking readi/writei can hang indefinitely on ASYNC endpoints when stream enters DRAINING state
 - **snd_pcm_prepare() + snd_pcm_start() recovery**: `snd_pcm_recover()` returns EBUSY (-16) and cannot handle DRAINING state; use explicit prepare+start sequence instead of bare start
+- **Dual-stream readiness gate** (built-in): prevents playSKIP by gating on both capture and playback availability before DSP processing. Without this, the tight processing loop runs ahead of the async USB playback clock, filling the buffer and rhythmically dropping blocks at block rate (~93 Hz for 48kHz/512). This manifests as rhythmic crackling during test modes with crossover enabled — but is a timing issue in the HAL, not a DSP filter problem.
 
 ## DSP Core
 
@@ -222,6 +229,11 @@ struct Stage {
 | Stage | Description |
 |---|---|
 | **GainStage** | Per-channel gain (0.0–1.0 linear) with 64-sample ramp to avoid clicks; supports mute |
+| **BiquadStage** | Single biquad filter in Direct Form II Transposed. Reusable building block for EQ bands and crossover sections. 2-sample group delay latency |
+| **CrossoverStage** | Cascaded biquads (up to 4) + optional first-order section for odd slopes. One instance per output channel. Supports disable() for pass-through bypass. Compile-time size audit ensures L1 cache fit (<1024 bytes). Coefficients sent as `STAGE_PARAM_CROSSOVER` binary parameter block from control plane — no math in RT path |
+| **TrimStage** | Fixed linear gain with phase inversion support. No ramp or smoothing: applied at init or block-boundary reload. Used for per-driver level adjustment (-24 to +12 dB) and polarity flip |
+| **DelayStage** | Circular buffer delay line (max 32768 samples, ~0.68s at 48kHz). Fixed-size buffer with no heap allocation after construction. Reports latency equal to configured delay in samples |
+| **LimiterStage** | Per-output peak limiter with attack/release envelope follower and compression ratio. Per-channel independent envelope state. Configurable threshold (-24–0 dBFS), attack (0.1–100 ms), release (10–2000 ms), and ratio (1:1 to 20:1). Defaults to disabled at startup (threshold above full-scale, ratio 1:1) |
 | **NullStage** | No-op stage for cycle budget measurement and latency baseline |
 
 ## Command / Telemetry Interface
@@ -269,10 +281,12 @@ Versioned parameter format (`ParamBlockHeader` + `StageParamEntry[]`). Stage par
 
 Crossover filters are implemented as DSP stages using precomputed biquad coefficients. The workflow:
 
-1. **Config**: Web UI sets crossover parameters per output (frequency, topology, slope) in JSON config
-2. **Precompute**: `ConfigLoader::precomputeBiquadCoeffs()` converts frequency + Q + gain to `b0/b1/b2/a1/a2` using Audio EQ Cookbook formulas. Runs on Linux control plane at normal priority — no libm calls in RT path.
+1. **Config**: Web UI sets crossover parameters per output (enabled, frequency, topology, slope) in JSON config
+2. **Precompute**: `ConfigLoader::precomputeCrossoverCoeffs()` converts frequency + topology + slope to cascaded biquad coefficients (`b0/b1/b2/a1/a2` per section). Supports up to 4 biquads (LR48) plus an optional first-order section for odd slopes (18/36 dB/oct). Runs on Linux control plane at normal priority — no libm calls in RT path.
 3. **Send**: Coefficients packaged as `STAGE_PARAM_CROSSOVER` binary parameter block, pushed via command queue
 4. **Apply**: Core applies coefficients at next block boundary through StageSet swap — zero glitches
+
+When a crossover is disabled (`enabled: false`), the `CrossoverStage::disable()` method resets to pass-through mode with no filter applied.
 
 Supported topologies map to standard biquad designs:
 - **Linkwitz-Riley**: Cascaded Butterworth sections, in-phase summation at crossover point (flat combined magnitude)
@@ -301,7 +315,9 @@ POSIX shared memory ring buffers (`shm_open` + `mmap`) with lifecycle management
 
 ### ConfigLoader
 
-JSON-to-binary parameter conversion. Custom minimal JSON parser (no library dependency). Full schema: audio format, input/output gains, filter bands (biquad), drivers (delay/trim/phase), limiter settings, measurement points. Precomputes biquad coefficients using Audio EQ Cookbook formulas. Validates all parameters with structured error codes (`CONFIG_ERR_SAMPLE_RATE`, `CONFIG_ERR_FREQ_NYQUIST`, etc.).
+JSON-to-binary parameter conversion. Custom minimal JSON parser (no library dependency). Full schema: audio format, input/output gains, filter bands (biquad), drivers (delay/trim/phase), limiter settings (threshold/attack/release/ratio), measurement points. Precomputes biquad coefficients using Audio EQ Cookbook formulas. Validates all parameters with structured error codes (`CONFIG_ERR_SAMPLE_RATE`, `CONFIG_ERR_FREQ_NYQUIST`, etc.).
+
+**`precomputeCrossoverCoeffs()`**: Converts crossover frequency + topology + slope to cascaded biquad coefficients. Handles all supported topologies (LR, BW, Bessel) and slopes (12–48 dB/oct). Returns coefficient array, biquad count, first-order flag, and first-order coefficient for odd slopes. Rejects invalid inputs: zero cutoff, Nyquist boundary violations, unsupported slopes, and zero sample rate.
 
 **Case-insensitive field matching**: accepts both `"BufferSize"` (web UI schema) and `"bufferSize"` (legacy format) to prevent silent buffer size mismatches between config files.
 
@@ -350,7 +366,7 @@ The architecture separates portable processing (DSP core) from hardware access (
 
 ## Test Suite
 
-12 test binaries using custom ASSERT macro (no external framework), CTest integration:
+20+ test binaries using custom ASSERT macro (no external framework), CTest integration:
 
 | Test | Scope |
 |---|---|
@@ -364,7 +380,16 @@ The architecture separates portable processing (DSP core) from hardware access (
 | `test_xrun_recovery_alsa` | Xrun recovery with real ALSA (Linux-only) |
 | `test_rt_thread_hygiene` | RT thread constraints verification (no file I/O, no network, no allocation) |
 | `test_monitoring_networking` | StateWriter, telemetry queue plumbing |
-| `test_shm_ipc_config` | SHM lifecycle, header validation, config loader error codes |
+| `test_shm_ipc_config` | SHM lifecycle, header validation, config loader error codes, crossover coefficient precomputation for all topologies/slopes |
 | `test_measurement_timing` | Per-stage timing measurement |
 | `test_architecture_separation` | HAL/DSP/control separation verification |
 | `test_dsp_quality` | DSP output quality metrics (denormal handling, click-free ramps) |
+| `test_volume_mute` | Gain accuracy, mute override, clamping behavior |
+| `test_input_routing` | PGM_L duplication, PGM_R isolation, Mic metering |
+| `test_biquad_stage` | Single biquad filter: DC pass-through, Nyquist attenuation, coefficient reload, multi-channel, stability under sustained input |
+| `test_crossover_stage` | Cascaded crossover: LR24/BW12/Bessel24 coefficients, first-order 18dB section, disable bypass, latency declaration, multi-channel independence |
+| `test_engine_integration` | Full engine pipeline with crossover stages wired through SimHal |
+| `test_crossover_e2e` | End-to-end crossover validation: config → precompute → binary params → stage apply → output verification |
+| `test_trim` | TrimStage: unity gain, +/-6dB accuracy, phase inversion, combined trim+invert, extreme gains (+/-24/48dB), multi-channel, silence pass-through |
+| `test_delay` | DelayStage: zero delay pass-through, fractional sample alignment, circular buffer wrap, latency declaration, multi-channel independence |
+| `test_limiter` | LimiterStage: below/at/above threshold behavior, attack/release timing, brickwall ratio, envelope decay, multi-channel independence, silence pass-through, sustained stability (no NaN/Inf) |

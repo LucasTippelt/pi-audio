@@ -6,6 +6,7 @@ export type MonitorChannel = 'pgm-l' | 'pgm-r' | 'tweeter' | 'woofer' | 'mic-1' 
 export type PresetVersion = 'staging' | 'production';
 
 export interface CrossoverConfig {
+  enabled: boolean;
   frequency: number;
   topology: Topology;
   slope: Slope;
@@ -29,7 +30,9 @@ export interface DriverConfig {
 export interface LimiterConfig {
   enabled: boolean;
   threshold: number;
+  attack: number;
   release: number;
+  ratio: number;
 }
 
 export interface MeasurementPoint {
@@ -74,8 +77,8 @@ export const VALID_SLOPES: Slope[] = [12, 18, 24, 36, 48];
 export const VALID_MONITOR_CHANNELS: MonitorChannel[] = ['pgm-l', 'pgm-r', 'tweeter', 'woofer', 'mic-1', 'mic-2', 'mic-3', 'mic-4', 'mic-5', 'mic-6'];
 
 export const DEFAULT_CROSSES: Record<string, CrossoverConfig> = {
-  Woofer: { frequency: 2500, topology: 'Linkwitz-Riley', slope: 24 },
-  Tweeter: { frequency: 2500, topology: 'Linkwitz-Riley', slope: 24 },
+  Woofer: { enabled: true, frequency: 2500, topology: 'Linkwitz-Riley', slope: 24 },
+  Tweeter: { enabled: true, frequency: 2500, topology: 'Linkwitz-Riley', slope: 24 },
 };
 
 export const DEFAULT_DRIVERS: DriverConfig[] = [
@@ -97,7 +100,7 @@ export const DEFAULT_STATE: ConfigState = {
     Tweeter: [],
   },
   drivers: DEFAULT_DRIVERS,
-  limiter: { enabled: true, threshold: -1, release: 80 },
+  limiter: { enabled: true, threshold: -1, attack: 5, release: 80, ratio: 4 },
   monitorChannel: 'tweeter',
   measurement: null,
 };

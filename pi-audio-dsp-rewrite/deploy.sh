@@ -13,7 +13,10 @@ cp /var/www/pi-audio/pi-audio-dsp-rewrite/build/pi-audio-engine /usr/local/bin/p
 echo "Starting pi-audio-engine..."
 systemctl start pi-audio-engine
 sleep 2
-
+systemctl restart pi-audio-engine.service
+sleep 2
+systemctl restart pi-audio-web.service
+sleep 2
 if systemctl is-active --quiet pi-audio-engine; then
     echo "Deployed and restarted successfully."
 else

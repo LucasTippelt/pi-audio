@@ -55,11 +55,14 @@ Per-output crossover filters split the signal between woofer and tweeter. Config
 
 | Parameter | Range | Default | Description |
 |---|---|---|---|
+| `enabled` | true / false | true | Enable/disable crossover for this driver |
 | `frequency` | 30 – 20 000 Hz | 2500 Hz | Crossover point frequency |
 | `topology` | Linkwitz-Riley, Butterworth, Bessel | Linkwitz-Riley | Filter topology |
 | `slope` | 12, 18, 24, 36, 48 dB/oct | 24 | Roll-off slope per octave |
 
 **Linkwitz-Riley** is the recommended topology for two-way systems: identical LR filters in phase at the crossover point produce a flat summed magnitude response. Butterworth gives maximally-flat passband with steeper transition. Bessel preserves transient shape (linear phase) at the cost of roll-off steepness.
+
+Crossovers can be bypassed per-driver by setting `enabled: false`. When disabled, the driver receives the full-bandwidth signal with no filter applied. The frontend shows a toggle switch and visually dims bypassed crossover cards.
 
 Coefficients are precomputed on the Linux control plane using Audio EQ Cookbook biquad formulas, then sent to the DSP core as compact binary parameter blocks (`STAGE_PARAM_CROSSOVER`). The core never parses JSON or runs heavy math — it receives ready-to-use `b0/b1/b2/a1/a2` coefficients.
 
@@ -164,6 +167,13 @@ If `engine-state.json` shows zero xruns but output levels are near silence (-160
 
 ASYNC USB interfaces (UR12, etc.) cannot use linked streams (`snd_pcm_link`). The engine uses non-blocking independent streams with `avail_update()` pacing. If using an older binary that still links streams, switch to `hw:` device name or rebuild current code.
 
+### Rhythmic crackling during test modes with crossover enabled
+
+- **Symptom**: Regular clicks/crackles at block rate (~93 Hz for 48kHz/512) when running tweeter or woofer tests with crossover filters active. Limiter has no effect on the artifact.
+- **Cause**: On ASYNC USB devices, capture and playback streams run on independent clocks. The tight processing loop can run ahead of the playback clock, filling the ALSA buffer and causing periodic block drops (`playSKIP` in diagnostics). Each dropped block produces a click at the block boundary — rhythmic because it matches the processing rate.
+- **Fix**: Dual-stream readiness gate (built into current `AlsaHal`). Before DSP processing, the loop waits until BOTH capture has data AND playback has space. This prevents producing blocks that cannot be delivered. Wait uses 100μs steps up to 50ms timeout; on timeout, falls through with silence so telemetry continues flowing.
+- **Verify**: After deploying current binary, `playSKIP` counter should stop growing during test modes. If crackling persists, increase buffer size (`--buffer 1024`) or check for CPU contention.
+
 ## Structure
 
 ```
@@ -175,7 +185,7 @@ pi-audio/
 │   │   ├── hal/                # Hardware abstraction (currently SimHal, AlsaHal)
 │   │   ├── msg/                # Command queue, telemetry, SHM rings
 │   │   └── control/            # Config loader, state writer
-│   └── tests/                  # 12 test binaries
+│   └── tests/                  # 20+ test binaries
 ├── pi-audio-web-rewrite/       # Web server (TypeScript, Node.js)
 │   ├── src/
 │   │   ├── http/               # REST API endpoints

@@ -45,6 +45,9 @@ public:
     void setRouting(const RoutingConfig& rc);
     const RoutingConfig& routing() const { return m_routing; }
 
+    /* Get sample rate for stage configuration. */
+    uint32_t getSampleRate() const { return m_sampleRate; }
+
 private:
     uint32_t m_sampleRate     = 0;
     uint32_t m_maxBlockSize   = 0;
