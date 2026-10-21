@@ -81,6 +81,8 @@ void DspCore::process(float* const in[], uint32_t numInCh,
                 }
                 break;
             }
+            /* Modes 4-9: Mic tests — whitenoise injected into capture channels at engine level,
+             * flows through SHM rings → RC output. DSP core treats these as inactive (normal routing). */
             default: {
                 /* Unknown test mode — treat as inactive, route PGM_L to both outputs. */
                 if (m_routing.pgmLIndex < numInCh && numOutCh >= 2) {

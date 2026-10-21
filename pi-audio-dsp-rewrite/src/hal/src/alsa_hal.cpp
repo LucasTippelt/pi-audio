@@ -245,6 +245,59 @@ void AlsaHal::run() {
                 m_engine->onBlock(capPlanar, m_numInputs, playPlanar, m_numOutputs, info);
             }
 
+            /* --- Room Correction I/O (NONBLOCK, drop on failure). --- */
+            if (m_pcmRcPlayback) {
+                int32_t* rcOutBuf = new int32_t[m_bufferSize * 2];
+
+                uint8_t testMode = m_rcTestMode.load();
+                bool hasData = false;
+
+                if (testMode != 0) {
+                    /* Mic test mode: generate whitenoise on the target channel. */
+                    uint32_t noiseCh = (testMode == 1) ? 0 : 1; /* Mic_1=ch0, Mic_2=ch1 */
+                    for (uint32_t f = 0; f < m_bufferSize; ++f) {
+                        m_rcTestNoiseSeed = m_rcTestNoiseSeed * 1664525u + 1013904223u;
+                        float sample = static_cast<float>((m_rcTestNoiseSeed >> 16) & 0xFFFF) / 65536.0f * 0.6f - 0.3f;
+                        int32_t val = static_cast<int32_t>(sample * 8388608.0f); /* scale to ~24-bit */
+                        rcOutBuf[f * 2 + noiseCh] = val;
+                        rcOutBuf[f * 2 + (1 - noiseCh)] = 0;
+                    }
+                    hasData = true;
+                } else if (m_pcmRcCapture) {
+                    /* Normal mode: read from RC capture device and pass through. */
+                    snd_pcm_sframes_t rcAvail = snd_pcm_avail_update(m_pcmRcCapture);
+                    if (rcAvail >= static_cast<snd_pcm_sframes_t>(m_bufferSize)) {
+                        snd_pcm_sframes_t r = snd_pcm_readi(m_pcmRcCapture, rcOutBuf, m_bufferSize);
+                        if (r > 0) {
+                            hasData = true;
+                        } else {
+                            int err = snd_pcm_state(m_pcmRcCapture);
+                            if (err == SND_PCM_STATE_XRUN || err == SND_PCM_STATE_DRAINING || err == SND_PCM_STATE_PREPARED) {
+                                snd_pcm_prepare(m_pcmRcCapture);
+                                snd_pcm_start(m_pcmRcCapture);
+                            }
+                        }
+                    }
+                }
+
+                /* Write to RC playback device (loopback/SoundCard) — NONBLOCK. */
+                if (hasData) {
+                    snd_pcm_sframes_t rcPlayAvail = snd_pcm_avail_update(m_pcmRcPlayback);
+                    if (rcPlayAvail >= static_cast<snd_pcm_sframes_t>(m_bufferSize)) {
+                        snd_pcm_sframes_t pw = snd_pcm_writei(m_pcmRcPlayback, rcOutBuf, m_bufferSize);
+                        if (pw < 0) {
+                            int err = snd_pcm_state(m_pcmRcPlayback);
+                            if (err == SND_PCM_STATE_XRUN || err == SND_PCM_STATE_DRAINING || err == SND_PCM_STATE_PREPARED) {
+                                snd_pcm_prepare(m_pcmRcPlayback);
+                                snd_pcm_start(m_pcmRcPlayback);
+                            }
+                        }
+                    }
+                }
+
+                delete[] rcOutBuf;
+            }
+
             /* Interleave + convert float to S32_LE with fade. */
             {
                 uint32_t clipCount[2] = {0, 0}; /* per-channel clip counts */
@@ -417,8 +470,12 @@ void AlsaHal::run() {
 void AlsaHal::close() {
     if (m_pcmCapture)  snd_pcm_close(m_pcmCapture);
     if (m_pcmPlayback) snd_pcm_close(m_pcmPlayback);
+    if (m_pcmRcCapture)  snd_pcm_close(m_pcmRcCapture);
+    if (m_pcmRcPlayback) snd_pcm_close(m_pcmRcPlayback);
     m_pcmCapture  = nullptr;
     m_pcmPlayback = nullptr;
+    m_pcmRcCapture  = nullptr;
+    m_pcmRcPlayback = nullptr;
     munlockall();
 }
 
@@ -502,6 +559,83 @@ bool AlsaHal::openStreams() {
     }
 
     /* NO LINK — streams operate independently on ASYNC USB. */
+
+    /* --- Open Room Correction PCM pair (if devices are set). --- */
+    if (m_rcInputDevice && m_rcInputDevice[0] != '\0') {
+        int rcErr = snd_pcm_open(&m_pcmRcCapture, m_rcInputDevice, SND_PCM_STREAM_CAPTURE, SND_PCM_NONBLOCK);
+        if (rcErr < 0) {
+            std::fprintf(stderr, "[hal] RC capture open failed (%s): %s — disabling RC input\n",
+                         m_rcInputDevice, snd_strerror(rcErr));
+            m_pcmRcCapture = nullptr;
+        } else {
+            snd_pcm_hw_params_t* rcParams;
+            snd_pcm_hw_params_alloca(&rcParams);
+            snd_pcm_hw_params_any(m_pcmRcCapture, rcParams);
+            snd_pcm_hw_params_set_access(m_pcmRcCapture, rcParams, SND_PCM_ACCESS_RW_INTERLEAVED);
+            snd_pcm_hw_params_set_format(m_pcmRcCapture, rcParams, SND_PCM_FORMAT_S32_LE);
+            unsigned int rcRate = m_sampleRate;
+            snd_pcm_hw_params_set_rate_near(m_pcmRcCapture, rcParams, &rcRate, nullptr);
+            snd_pcm_hw_params_set_channels(m_pcmRcCapture, rcParams, 2);
+            {
+                snd_pcm_uframes_t periodSize = m_bufferSize;
+                snd_pcm_uframes_t bufferSize = m_bufferSize * 4;
+                snd_pcm_hw_params_set_period_size_near(m_pcmRcCapture, rcParams, &periodSize, nullptr);
+                snd_pcm_hw_params_set_buffer_size_near(m_pcmRcCapture, rcParams, &bufferSize);
+            }
+            rcErr = snd_pcm_hw_params(m_pcmRcCapture, rcParams);
+            if (rcErr < 0) {
+                std::fprintf(stderr, "[hal] RC capture hw_params failed: %s — disabling RC input\n", snd_strerror(rcErr));
+                snd_pcm_close(m_pcmRcCapture);
+                m_pcmRcCapture = nullptr;
+            } else {
+                /* Prime RC capture with blocking read. */
+                std::vector<int32_t> rcPrime(m_bufferSize * 2, 0);
+                snd_pcm_nonblock(m_pcmRcCapture, 0);
+                for (int i = 0; i < 10; ++i) {
+                    snd_pcm_sframes_t r = snd_pcm_readi(m_pcmRcCapture, rcPrime.data(), m_bufferSize * 2);
+                    if (r > 0) break;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                }
+                snd_pcm_nonblock(m_pcmRcCapture, 1);
+            }
+        }
+    }
+
+    if (m_rcOutputDevice && m_rcOutputDevice[0] != '\0') {
+        int rcErr = snd_pcm_open(&m_pcmRcPlayback, m_rcOutputDevice, SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK);
+        if (rcErr < 0) {
+            std::fprintf(stderr, "[hal] RC playback open failed (%s): %s — disabling RC output\n",
+                         m_rcOutputDevice, snd_strerror(rcErr));
+            m_pcmRcPlayback = nullptr;
+        } else {
+            snd_pcm_hw_params_t* rcParams;
+            snd_pcm_hw_params_alloca(&rcParams);
+            snd_pcm_hw_params_any(m_pcmRcPlayback, rcParams);
+            snd_pcm_hw_params_set_access(m_pcmRcPlayback, rcParams, SND_PCM_ACCESS_RW_INTERLEAVED);
+            snd_pcm_hw_params_set_format(m_pcmRcPlayback, rcParams, SND_PCM_FORMAT_S32_LE);
+            unsigned int rcRate = m_sampleRate;
+            snd_pcm_hw_params_set_rate_near(m_pcmRcPlayback, rcParams, &rcRate, nullptr);
+            snd_pcm_hw_params_set_channels(m_pcmRcPlayback, rcParams, 2);
+            {
+                snd_pcm_uframes_t periodSize = m_bufferSize;
+                snd_pcm_uframes_t bufferSize = m_bufferSize * 4;
+                snd_pcm_hw_params_set_period_size_near(m_pcmRcPlayback, rcParams, &periodSize, nullptr);
+                snd_pcm_hw_params_set_buffer_size_near(m_pcmRcPlayback, rcParams, &bufferSize);
+            }
+            rcErr = snd_pcm_hw_params(m_pcmRcPlayback, rcParams);
+            if (rcErr < 0) {
+                std::fprintf(stderr, "[hal] RC playback hw_params failed: %s — disabling RC output\n", snd_strerror(rcErr));
+                snd_pcm_close(m_pcmRcPlayback);
+                m_pcmRcPlayback = nullptr;
+            } else {
+                /* Prime RC playback with silence. */
+                std::vector<int32_t> rcSilence(m_bufferSize * 2, 0);
+                snd_pcm_nonblock(m_pcmRcPlayback, 0);
+                snd_pcm_writei(m_pcmRcPlayback, rcSilence.data(), m_bufferSize * 2);
+                snd_pcm_nonblock(m_pcmRcPlayback, 1);
+            }
+        }
+    }
 
     /* Verify actual negotiated parameters. */
     {

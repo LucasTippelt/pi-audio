@@ -18,6 +18,14 @@ public:
     void setCaptureDevice(const char* dev) { m_captureDevice = dev; }
     void setPlaybackDevice(const char* dev) { m_playbackDevice = dev; }
 
+    /* Room correction ALSA device names. Empty string disables RC I/O. */
+    void setRcInputDevice(const char* dev) { m_rcInputDevice = dev; }
+    void setRcOutputDevice(const char* dev) { m_rcOutputDevice = dev; }
+
+    /* Mic test mode — 0=off, 1=Mic_1 (ch0), 2=Mic_2 (ch1).
+     * When active, generates whitenoise on the RC output instead of reading capture. */
+    void setRcTestMode(uint8_t mode) { m_rcTestMode = mode; }
+
     /* CPU affinity mask for RT thread (no-op in original, kept for engine binary). */
     void setCoreMask(uint32_t mask) { (void)mask; }
 
@@ -45,8 +53,20 @@ private:
     const char* m_captureDevice = "default";
     const char* m_playbackDevice = "default";
 
+    /* Room correction device names. Empty string = disabled. */
+    const char* m_rcInputDevice = "";
+    const char* m_rcOutputDevice = "";
+
     snd_pcm_t* m_pcmCapture   = nullptr;
     snd_pcm_t* m_pcmPlayback  = nullptr;
+
+    /* Room correction PCM handles (loopback routing). */
+    snd_pcm_t* m_pcmRcCapture   = nullptr;
+    snd_pcm_t* m_pcmRcPlayback  = nullptr;
+
+    /* Mic test mode — 0=off, 1=Mic_1 whitenoise on ch0, 2=Mic_2 whitenoise on ch1. */
+    std::atomic<uint8_t> m_rcTestMode{0};
+    uint32_t m_rcTestNoiseSeed = 54321u; /* LCG seed for mic test whitenoise */
 
     uint32_t m_sampleRate = 0;
     uint32_t m_bufferSize = 0;

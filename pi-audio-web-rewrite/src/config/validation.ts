@@ -51,6 +51,12 @@ export function normalizeState(source: Record<string, unknown>, previous?: Confi
   out.input = isValidPcmName(source.input) ? (source.input as string) : base.input;
   out.output = isValidPcmName(source.output) ? (source.output as string) : base.output;
 
+  const rcIn = source.rcInput as string | undefined;
+  out.rcInput = (typeof rcIn === 'string' && rcIn.length <= 127) ? rcIn : base.rcInput;
+
+  const rcOut = source.rcOutput as string | undefined;
+  out.rcOutput = (typeof rcOut === 'string' && rcOut.length <= 127) ? rcOut : base.rcOutput;
+
   const sr = source.sampleRate as number | undefined;
   out.sampleRate = inArray(VALID_SAMPLE_RATES, sr ?? -1) ? (sr as any) : base.sampleRate;
 

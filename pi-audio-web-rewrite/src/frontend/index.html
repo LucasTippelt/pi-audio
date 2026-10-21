@@ -62,6 +62,11 @@
             <div class="section-head"><div><h2>Audio input</h2></div></div>
             <label class="field-label" for="audio-input">INPUT</label>
             <select class="select-control" id="audio-input"><option value="default">Loading devices…</option></select>
+
+            <label class="field-label" for="rc-input">ROOM CORRECT INPUT</label>
+            <select class="select-control" id="rc-input"><option value="">— disabled —</option></select>
+            <p class="field-note" id="rc-input-note">ALSA capture device for measurement mics (e.g., UR12 inputs 3-4).</p>
+
             <div class="input-options">
               <div><label class="field-label" for="sample-rate">SAMPLE RATE</label>
                 <select class="select-control" id="sample-rate" disabled>
@@ -93,6 +98,12 @@
               <button class="test-pgm" type="button" id="test-pgm" aria-label="Test PGM Input" title="Play stereo whitenoise on Program output">Test PGM Input</button>
             </div>
 
+            <div class="test-group">
+              <input type="number" id="test-mic-duration" min="1" max="60" step="1" placeholder="3" aria-label="Mic test duration in seconds" title="Duration in seconds (default 3)">
+              <button type="button" id="test-mic-1" data-test-speaker="Mic_1">Test Mic 1</button>
+              <button type="button" id="test-mic-2" data-test-speaker="Mic_2">Test Mic 2</button>
+            </div>
+
             <label class="field-label" for="mic-count">MEASUREMENT MICS</label>
             <select class="select-control" id="mic-count">
               <option value="2">2 mics</option>
@@ -121,6 +132,11 @@
 
             <label class="field-label" for="audio-output">ALSA PLAYBACK DEVICE</label>
             <select class="select-control" id="audio-output"><option value="default">Loading devices…</option></select>
+
+            <label class="field-label" for="rc-output">ROOM CORRECT OUTPUT</label>
+            <select class="select-control" id="rc-output"><option value="">— disabled —</option></select>
+            <p class="field-note" id="rc-output-note">ALSA playback device for mic data routing (e.g., loopback).</p>
+
             <p class="field-note" id="output-note">For debugging only; remove after development.</p>
           </section>
 

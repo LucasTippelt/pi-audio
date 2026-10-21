@@ -36,7 +36,7 @@ static void onHalReopen(uint32_t sampleRate, uint32_t bufferSize) {
     }
 }
 static constexpr uint32_t kDefaultBufferSize = 128;
-static constexpr uint32_t kDefaultNumInputs  = 2;
+static constexpr uint32_t kDefaultNumInputs  = 4;
 static constexpr uint32_t kDefaultNumOutputs = 2;
 
 int main(int argc, char* argv[]) {
@@ -49,6 +49,8 @@ int main(int argc, char* argv[]) {
     uint32_t coreMask        = 0;
     const char* captureDev   = nullptr;
     const char* playbackDev  = nullptr;
+    const char* rcInputDev   = nullptr;
+    const char* rcOutputDev  = nullptr;
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--config") == 0 && i + 1 < argc) {
@@ -67,6 +69,10 @@ int main(int argc, char* argv[]) {
             captureDev = argv[++i];
         } else if (std::strcmp(argv[i], "--playback-dev") == 0 && i + 1 < argc) {
             playbackDev = argv[++i];
+        } else if (std::strcmp(argv[i], "--rc-input-dev") == 0 && i + 1 < argc) {
+            rcInputDev = argv[++i];
+        } else if (std::strcmp(argv[i], "--rc-output-dev") == 0 && i + 1 < argc) {
+            rcOutputDev = argv[++i];
         } else if (std::strcmp(argv[i], "--help") == 0) {
             std::printf("Usage: pi-audio-engine [options]\n");
             std::printf("  --config <path>   JSON config file\n");
@@ -77,6 +83,8 @@ int main(int argc, char* argv[]) {
             std::printf("  --core-mask <hex> CPU affinity mask for RT thread\n");
             std::printf("  --capture-dev <d> ALSA capture device (default: from config or 'default')\n");
             std::printf("  --playback-dev <d> ALSA playback device (default: from config or 'default')\n");
+            std::printf("  --rc-input-dev <d>  ALSA capture device for room correction mics\n");
+            std::printf("  --rc-output-dev <d> ALSA playback device for mic output (loopback)\n");
             return 0;
         } else if (argv[i][0] != '-' && configFile == nullptr) {
             /* Backward-compatible positional arg: first non-flag = config file. */
@@ -144,6 +152,8 @@ int main(int argc, char* argv[]) {
     /* --- Extract device names from config and apply to HAL. --- */
     char captureDevBuf[128] = "default";
     char playbackDevBuf[128] = "default";
+    char rcInputDevBuf[128] = "";
+    char rcOutputDevBuf[128] = "";
 
 #ifdef __linux__
     if (alsaHal && configFile) {
@@ -158,6 +168,7 @@ int main(int argc, char* argv[]) {
                     (void)std::fread(buf, 1, static_cast<size_t>(sz), f);
                     buf[sz] = '\0';
                     ConfigLoader::parseDeviceNames(buf, static_cast<size_t>(sz), captureDevBuf, playbackDevBuf);
+                    ConfigLoader::parseRcDeviceNames(buf, static_cast<size_t>(sz), rcInputDevBuf, rcOutputDevBuf);
                     std::free(buf);
                 }
             }
@@ -168,9 +179,13 @@ int main(int argc, char* argv[]) {
     /* CLI args override config file values. */
     const char* finalCapture = captureDev ? captureDev : captureDevBuf;
     const char* finalPlayback = playbackDev ? playbackDev : playbackDevBuf;
+    const char* finalRcInput = rcInputDev ? rcInputDev : (rcInputDevBuf[0] != '\0' ? rcInputDevBuf : nullptr);
+    const char* finalRcOutput = rcOutputDev ? rcOutputDev : (rcOutputDevBuf[0] != '\0' ? rcOutputDevBuf : nullptr);
     if (alsaHal) {
         alsaHal->setCaptureDevice(finalCapture);
         alsaHal->setPlaybackDevice(finalPlayback);
+        if (finalRcInput) alsaHal->setRcInputDevice(finalRcInput);
+        if (finalRcOutput) alsaHal->setRcOutputDevice(finalRcOutput);
     }
 #endif
 
@@ -235,6 +250,11 @@ int main(int argc, char* argv[]) {
         const char* seedOutput = pbBuf[0] ? pbBuf : finalPlayback;
 
         stateWriter.setAppliedDevices(seedInput, seedOutput);
+        if (finalRcInput || finalRcOutput) {
+            stateWriter.setAppliedRcDevices(
+                finalRcInput ? finalRcInput : "",
+                finalRcOutput ? finalRcOutput : "");
+        }
         if (initVolume >= 0) stateWriter.setAppliedVolume(initVolume);
         stateWriter.setAppliedMuted(initMuted);
 
@@ -371,14 +391,20 @@ int main(int argc, char* argv[]) {
             /* Remove trigger file immediately so web server can send next command. */
             std::remove("/run/pi-audio/test-command");
 
-            if (mode < 0 || mode > 3) continue;
+            if (mode < 0 || mode > 9) continue;
 
             /* Push test mode start command. */
-            CmdSetTestMode startCmd{};
-            startCmd.header.version = 1;
-            startCmd.header.type = CMD_SET_TEST_MODE;
-            startCmd.mode = static_cast<uint8_t>(mode);
-            testCmdQueue.push(startCmd);
+            if (mode >= 4 && mode <= 9) {
+                /* Mic test: set RC test mode on HAL (maps to channel 0-5). */
+                uint8_t rcMode = static_cast<uint8_t>(mode - 3); /* 4→1, 5→2, etc. */
+                if (alsaHal) alsaHal->setRcTestMode(rcMode);
+            } else {
+                CmdSetTestMode startCmd{};
+                startCmd.header.version = 1;
+                startCmd.header.type = CMD_SET_TEST_MODE;
+                startCmd.mode = static_cast<uint8_t>(mode);
+                testCmdQueue.push(startCmd);
+            }
 
 #ifdef PI_AUDIO_DIAG_LOG
             std::printf("[engine] Test mode %d started, duration %.1fs\n", mode, durationSec);
@@ -405,11 +431,16 @@ int main(int argc, char* argv[]) {
             }
 
             /* Push test mode stop command. */
-            CmdSetTestMode stopCmd{};
-            stopCmd.header.version = 1;
-            stopCmd.header.type = CMD_SET_TEST_MODE;
-            stopCmd.mode = 0;
-            testCmdQueue.push(stopCmd);
+            if (mode >= 4 && mode <= 9) {
+                /* Clear RC test mode for mic tests. */
+                if (alsaHal) alsaHal->setRcTestMode(0);
+            } else {
+                CmdSetTestMode stopCmd{};
+                stopCmd.header.version = 1;
+                stopCmd.header.type = CMD_SET_TEST_MODE;
+                stopCmd.mode = 0;
+                testCmdQueue.push(stopCmd);
+            }
 
 #ifdef PI_AUDIO_DIAG_LOG
             std::printf("[engine] Test mode stopped\n");
@@ -423,10 +454,20 @@ int main(int argc, char* argv[]) {
     std::thread reloadThread([&]() {
         char curCapture[128];
         char curPlayback[128];
+        char curRcInput[128] = "";
+        char curRcOutput[128] = "";
         std::strncpy(curCapture, finalCapture, sizeof(curCapture) - 1);
         curCapture[sizeof(curCapture) - 1] = '\0';
         std::strncpy(curPlayback, finalPlayback, sizeof(curPlayback) - 1);
         curPlayback[sizeof(curPlayback) - 1] = '\0';
+        if (finalRcInput) {
+            std::strncpy(curRcInput, finalRcInput, sizeof(curRcInput) - 1);
+            curRcInput[sizeof(curRcInput) - 1] = '\0';
+        }
+        if (finalRcOutput) {
+            std::strncpy(curRcOutput, finalRcOutput, sizeof(curRcOutput) - 1);
+            curRcOutput[sizeof(curRcOutput) - 1] = '\0';
+        }
 
         /* Track current DSP format for reopen detection. */
         uint32_t curSampleRate = sampleRate;
@@ -447,6 +488,8 @@ int main(int argc, char* argv[]) {
             /* Read config file for device names and DSP params. */
             char newCapture[128];
             char newPlayback[128];
+            char newRcInput[128] = "";
+            char newRcOutput[128] = "";
             uint32_t newSampleRate = 0;
             uint32_t newBufferSize = 0;
 
@@ -461,6 +504,7 @@ int main(int argc, char* argv[]) {
                         (void)std::fread(buf, 1, static_cast<size_t>(sz), f);
                         buf[sz] = '\0';
                         ConfigLoader::parseDeviceNames(buf, static_cast<size_t>(sz), newCapture, newPlayback);
+                        ConfigLoader::parseRcDeviceNames(buf, static_cast<size_t>(sz), newRcInput, newRcOutput);
 
                         /* Extract sample rate and buffer size for reopen detection. */
                         newSampleRate = ConfigLoader::extractSampleRate(buf, static_cast<size_t>(sz));
@@ -584,6 +628,21 @@ int main(int argc, char* argv[]) {
                 stateWriter.setAppliedDevices(newCapture, newPlayback);
                 /* Force HAL to close old streams and reopen with new device names.
                  * Passing (0, 0) keeps current sample rate and buffer size. */
+                alsaHal->requestReopen(0, 0);
+            }
+
+            /* If RC devices changed, signal HAL reopen. */
+            if (alsaHal &&
+                (std::strcmp(newRcInput, curRcInput) != 0 || std::strcmp(newRcOutput, curRcOutput) != 0)) {
+                const char* ri = newRcInput[0] != '\0' ? newRcInput : "";
+                const char* ro = newRcOutput[0] != '\0' ? newRcOutput : "";
+                alsaHal->setRcInputDevice(ri);
+                alsaHal->setRcOutputDevice(ro);
+                stateWriter.setAppliedRcDevices(ri, ro);
+                std::strncpy(curRcInput, newRcInput, sizeof(curRcInput) - 1);
+                curRcInput[sizeof(curRcInput) - 1] = '\0';
+                std::strncpy(curRcOutput, newRcOutput, sizeof(curRcOutput) - 1);
+                curRcOutput[sizeof(curRcOutput) - 1] = '\0';
                 alsaHal->requestReopen(0, 0);
             }
 

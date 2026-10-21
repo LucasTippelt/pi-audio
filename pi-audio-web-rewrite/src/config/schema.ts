@@ -48,6 +48,12 @@ export interface MeasurementData {
   measuredAt: string;
 }
 
+export interface RoomCorrectionMeta {
+  appliedAt: string;
+  sourceApp: string;
+  bandsApplied: number;
+}
+
 export interface ConfigState {
   input: string;
   output: string;
@@ -56,6 +62,9 @@ export interface ConfigState {
   micCount: number;
   volume: number;
   muted: boolean;
+  rcInput: string;
+  rcOutput: string;
+  roomCorrection?: RoomCorrectionMeta;
   crossovers: Record<string, CrossoverConfig>;
   bands: Record<string, BandConfig[]>;
   drivers: DriverConfig[];
@@ -94,6 +103,8 @@ export const DEFAULT_STATE: ConfigState = {
   micCount: 2,
   volume: 65,
   muted: false,
+  rcInput: '',
+  rcOutput: '',
   crossovers: DEFAULT_CROSSES,
   bands: {
     Woofer: [],

@@ -34,6 +34,7 @@ const ui = {
 const defaults = {
     input: 'default', output: 'default', sampleRate: 48000, BufferSize: 512,
     micCount: 2, volume: 65, muted: false,
+    rcInput: '', rcOutput: '',
     crossovers: {
         Woofer: { frequency: 2500, topology: 'Linkwitz-Riley', slope: 24 },
         Tweeter: { frequency: 2500, topology: 'Linkwitz-Riley', slope: 24 },
@@ -238,6 +239,24 @@ function renderOutputs() {
   $('#output-note').textContent = 'For debugging only; remove after development.';
 }
 
+function renderRcInput() {
+  const select = $('#rc-input');
+  if (!select) return;
+  const inputs = [...new Set(['', ...ui.inputs, ui.state.rcInput])];
+  select.innerHTML = '<option value="">— disabled —</option>' +
+    inputs.filter(i => i !== '').map((item) => `<option value="${escapeHtml(item)}">${escapeHtml(item)}</option>`).join('');
+  select.value = ui.state.rcInput || '';
+}
+
+function renderRcOutput() {
+  const select = $('#rc-output');
+  if (!select) return;
+  const outputs = [...new Set(['', ...ui.outputs, ui.state.rcOutput])];
+  select.innerHTML = '<option value="">— disabled —</option>' +
+    outputs.filter(i => i !== '').map((item) => `<option value="${escapeHtml(item)}">${escapeHtml(item)}</option>`).join('');
+  select.value = ui.state.rcOutput || '';
+}
+
 function escapeHtml(value) {
   return String(value).replace(/[&<>\"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 }
@@ -355,6 +374,8 @@ function measurementResponse() {
 function renderState(includePresets = true) {
   renderInputs();
   renderOutputs();
+  renderRcInput();
+  renderRcOutput();
   renderMicCount();
   renderMonitorChannel();
   renderBands();
@@ -847,15 +868,16 @@ async function performDestructiveAction() {
   }
 }
 
-async function testSpeaker(driver, button) {
+async function testSpeaker(driver, button, defaultDuration) {
   if (ui.testBusy) return;
   ui.testBusy = true;
   disableAllTests();
   button.disabled = true;
   button.textContent = '\u2026';
   const row = button.closest('.driver-row');
-  const durationInput = row.querySelector('[data-driver-duration]');
-  const duration = durationInput && durationInput.value ? parseInt(durationInput.value, 10) : 3;
+  const durationInput = row ? row.querySelector('[data-driver-duration]') : null;
+  const duration = defaultDuration !== undefined ? defaultDuration
+    : (durationInput && durationInput.value ? parseInt(durationInput.value, 10) : 3);
   const minBlockMs = duration * 1000 + 500;
   const startMs = Date.now();
   clearTimeout(ui.saveTimer);
@@ -905,12 +927,20 @@ function disableAllTests() {
   document.querySelectorAll('[data-test-speaker]').forEach(b => { b.disabled = true; b.textContent = '\u2026'; });
   $('#test-pgm').disabled = true;
   $('#test-pgm').textContent = '\u2026';
+  const mic1 = $('#test-mic-1');
+  const mic2 = $('#test-mic-2');
+  if (mic1) { mic1.disabled = true; mic1.textContent = '\u2026'; }
+  if (mic2) { mic2.disabled = true; mic2.textContent = '\u2026'; }
 }
 
 function enableAllTests() {
   document.querySelectorAll('[data-test-speaker]').forEach(b => { b.disabled = false; b.textContent = 'Test'; });
   $('#test-pgm').disabled = false;
   $('#test-pgm').textContent = 'Test PGM Input';
+  const mic1 = $('#test-mic-1');
+  const mic2 = $('#test-mic-2');
+  if (mic1) { mic1.disabled = false; mic1.textContent = 'Test Mic 1'; }
+  if (mic2) { mic2.disabled = false; mic2.textContent = 'Test Mic 2'; }
 }
 
 async function quickSavePreset() {
@@ -1002,6 +1032,8 @@ function bindEvents() {
     queueSave();
   });
   $('#audio-output').addEventListener('change', (event) => { ui.state.output = event.target.value; queueSave(); });
+  $('#rc-input').addEventListener('change', (event) => { ui.state.rcInput = event.target.value || ''; queueSave(); });
+  $('#rc-output').addEventListener('change', (event) => { ui.state.rcOutput = event.target.value || ''; queueSave(); });
   $('#mic-count').addEventListener('change', (event) => {
     ui.state.micCount = Number(event.target.value);
     queueSave();
@@ -1088,6 +1120,18 @@ function bindEvents() {
     if (button && !button.disabled) testSpeaker(button.dataset.testSpeaker, button);
   });
   $('#test-pgm').addEventListener('click', (event) => testPgm(event.currentTarget));
+  const mic1Btn = $('#test-mic-1');
+  const mic2Btn = $('#test-mic-2');
+  if (mic1Btn) mic1Btn.addEventListener('click', () => {
+    const durInput = $('#test-mic-duration');
+    const dur = durInput && durInput.value ? Number(durInput.value) : 3;
+    testSpeaker('Mic_1', mic1Btn, dur);
+  });
+  if (mic2Btn) mic2Btn.addEventListener('click', () => {
+    const durInput = $('#test-mic-duration');
+    const dur = durInput && durInput.value ? Number(durInput.value) : 3;
+    testSpeaker('Mic_2', mic2Btn, dur);
+  });
   document.querySelectorAll('[data-unit]').forEach((button) => button.addEventListener('click', () => {
     ui.delayUnit = button.dataset.unit;
     document.querySelectorAll('[data-unit]').forEach((item) => item.classList.toggle('active', item === button));

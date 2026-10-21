@@ -77,6 +77,10 @@ struct FullConfig {
     char captureDevice[128];
     char playbackDevice[128];
 
+    /* Room correction ALSA device names (optional, empty = disabled). */
+    char rcInputDevice[128];
+    char rcOutputDevice[128];
+
     /* P4: Crossover configuration per output chain. */
     struct CrossoverConfig {
         float frequencyHz;     /* crossover frequency in Hz              */
@@ -134,7 +138,11 @@ public:
 
     /* Extract capture/playback device names from raw JSON. Writes to provided buffers (at least 128 bytes each). Returns true on success. */
     static bool parseDeviceNames(const char* json, size_t len,
-                                  char capture[128], char playback[128]);
+                                   char capture[128], char playback[128]);
+
+    /* Extract room correction device names from raw JSON. Writes to provided buffers (at least 128 bytes each). Empty = disabled. Returns true on success. */
+    static bool parseRcDeviceNames(const char* json, size_t len,
+                                     char rcInput[128], char rcOutput[128]);
 
     /* Extract volume (0-100) from JSON "volume" field, convert to linear gain [0, 1]. Returns true on success. */
     static bool extractVolumeGain(const char* json, size_t len, float* outGain);

@@ -53,6 +53,7 @@ export function createRouter(): express.Router {
       case 'preset-delete': configApi.handlePresetDelete(req, res); break;
       case 'preset-delete-all': configApi.handlePresetDeleteAll(req, res); break;
       case 'restore-defaults': configApi.handleRestoreDefaults(req, res); break;
+      case 'room-correction': configApi.handleRoomCorrection(req, res); break;
       default:
         res.status(404).json({ error: `Unknown action: ${action}` });
     }

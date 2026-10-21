@@ -35,9 +35,10 @@ public:
 
     /* Register master gain stage (applied once to all outputs after chains). */
     void setMasterGain(GainStage* g) { m_masterGain = g; }
-
     /* C1: Test mode — set by Engine, read during processing.
-     * 0=none, 1=woofer, 2=tweeter, 3=pgm-l */
+
+     * 0=none, 1=woofer, 2=tweeter, 3=pgm-l
+     * 4-9=mic tests (whitenoise injected into capture ch at engine level) */
     void setTestMode(uint8_t mode) { m_testMode = mode; }
     uint8_t getTestMode() const { return m_testMode; }
 

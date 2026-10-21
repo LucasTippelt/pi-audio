@@ -213,6 +213,12 @@ bool ConfigLoader::parseJson(const char* json, size_t len, FullConfig& cfg) {
     std::strncpy(cfg.playbackDevice, "default", sizeof(cfg.playbackDevice) - 1);
     cfg.playbackDevice[sizeof(cfg.playbackDevice) - 1] = '\0';
 
+    /* --- Room correction device names (defaults to empty/disabled). --- */
+    std::strncpy(cfg.rcInputDevice, "", sizeof(cfg.rcInputDevice) - 1);
+    cfg.rcInputDevice[sizeof(cfg.rcInputDevice) - 1] = '\0';
+    std::strncpy(cfg.rcOutputDevice, "", sizeof(cfg.rcOutputDevice) - 1);
+    cfg.rcOutputDevice[sizeof(cfg.rcOutputDevice) - 1] = '\0';
+
     {
         const char* val = jsonFindKey(json, len, "input");
         if (val) {
@@ -241,6 +247,40 @@ bool ConfigLoader::parseJson(const char* json, size_t len, FullConfig& cfg) {
                     if (nlen >= sizeof(cfg.playbackDevice)) nlen = sizeof(cfg.playbackDevice) - 1;
                     std::memcpy(cfg.playbackDevice, val, nlen);
                     cfg.playbackDevice[nlen] = '\0';
+                }
+            }
+        }
+    }
+
+    /* --- Room correction device names (optional). --- */
+    {
+        const char* val = jsonFindKey(json, len, "rcInput");
+        if (val) {
+            skipWhitespace(val);
+            if (*val == '"') {
+                ++val;
+                const char* endQuote = strchr(val, '"');
+                if (endQuote) {
+                    size_t nlen = endQuote - val;
+                    if (nlen >= sizeof(cfg.rcInputDevice)) nlen = sizeof(cfg.rcInputDevice) - 1;
+                    std::memcpy(cfg.rcInputDevice, val, nlen);
+                    cfg.rcInputDevice[nlen] = '\0';
+                }
+            }
+        }
+    }
+    {
+        const char* val = jsonFindKey(json, len, "rcOutput");
+        if (val) {
+            skipWhitespace(val);
+            if (*val == '"') {
+                ++val;
+                const char* endQuote = strchr(val, '"');
+                if (endQuote) {
+                    size_t nlen = endQuote - val;
+                    if (nlen >= sizeof(cfg.rcOutputDevice)) nlen = sizeof(cfg.rcOutputDevice) - 1;
+                    std::memcpy(cfg.rcOutputDevice, val, nlen);
+                    cfg.rcOutputDevice[nlen] = '\0';
                 }
             }
         }
@@ -1100,6 +1140,44 @@ bool ConfigLoader::parseDeviceNames(const char* json, size_t len,
                 if (nlen >= 127) nlen = 127;
                 std::memcpy(playback, val, nlen);
                 playback[nlen] = '\0';
+            }
+        }
+    }
+
+    return true;
+}
+
+bool ConfigLoader::parseRcDeviceNames(const char* json, size_t len,
+                                        char rcInput[128], char rcOutput[128]) {
+    rcInput[0] = '\0';
+    rcOutput[0] = '\0';
+
+    const char* val = jsonFindKey(json, len, "rcInput");
+    if (val) {
+        skipWhitespace(val);
+        if (*val == '"') {
+            ++val;
+            const char* endQuote = strchr(val, '"');
+            if (endQuote) {
+                size_t nlen = endQuote - val;
+                if (nlen >= 127) nlen = 127;
+                std::memcpy(rcInput, val, nlen);
+                rcInput[nlen] = '\0';
+            }
+        }
+    }
+
+    val = jsonFindKey(json, len, "rcOutput");
+    if (val) {
+        skipWhitespace(val);
+        if (*val == '"') {
+            ++val;
+            const char* endQuote = strchr(val, '"');
+            if (endQuote) {
+                size_t nlen = endQuote - val;
+                if (nlen >= 127) nlen = 127;
+                std::memcpy(rcOutput, val, nlen);
+                rcOutput[nlen] = '\0';
             }
         }
     }

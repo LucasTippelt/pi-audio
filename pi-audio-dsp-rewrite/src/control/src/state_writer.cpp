@@ -59,6 +59,13 @@ void StateWriter::setAppliedDevices(const char* input, const char* output) {
         std::strncpy(m_appliedOutput, output, sizeof(m_appliedOutput) - 1);
 }
 
+void StateWriter::setAppliedRcDevices(const char* rcInput, const char* rcOutput) {
+    if (rcInput)
+        std::strncpy(m_appliedRcInput, rcInput, sizeof(m_appliedRcInput) - 1);
+    if (rcOutput)
+        std::strncpy(m_appliedRcOutput, rcOutput, sizeof(m_appliedRcOutput) - 1);
+}
+
 void StateWriter::setAppliedCrossover(uint8_t chain, const AppliedCrossover& cx) {
     if (chain < kMaxChains) {
         m_crossover[chain] = cx;
@@ -134,6 +141,18 @@ void StateWriter::writeState(const TelemetryBlock& tel) {
         std::fprintf(f, "  \"volume\": null,\n");
     }
     std::fprintf(f, "  \"muted\": %s,\n", m_appliedMuted ? "true" : "false");
+
+    /* RC device fields. */
+    if (m_appliedRcInput[0]) {
+        std::fputs("  \"rcInput\": ", f); writeJsonString(f, m_appliedRcInput); std::fputc(',', f); std::fputc('\n', f);
+    } else {
+        std::fprintf(f, "  \"rcInput\": null,\n");
+    }
+    if (m_appliedRcOutput[0]) {
+        std::fputs("  \"rcOutput\": ", f); writeJsonString(f, m_appliedRcOutput); std::fputc(',', f); std::fputc('\n', f);
+    } else {
+        std::fprintf(f, "  \"rcOutput\": null,\n");
+    }
 
     /* Telemetry fields. */
     std::fprintf(f, "  \"sampleRate\": %u,\n", m_sampleRate);

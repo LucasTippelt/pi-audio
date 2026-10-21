@@ -60,6 +60,7 @@ public:
     void setAppliedVolume(int volume);
     void setAppliedMuted(bool muted);
     void setAppliedDevices(const char* input, const char* output);
+    void setAppliedRcDevices(const char* rcInput, const char* rcOutput);
 
     /* Per-chain applied DSP state setters. */
     void setAppliedCrossover(uint8_t chain, const AppliedCrossover& cx);
@@ -81,6 +82,8 @@ private:
     bool m_appliedMuted = false;
     char m_appliedInput[kMaxPcmName]  = "";
     char m_appliedOutput[kMaxPcmName] = "";
+    char m_appliedRcInput[kMaxPcmName]  = "";
+    char m_appliedRcOutput[kMaxPcmName] = "";
 
     /* Per-chain DSP applied state. */
     AppliedCrossover m_crossover[kMaxChains] = {};

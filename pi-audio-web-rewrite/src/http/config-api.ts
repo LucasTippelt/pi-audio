@@ -4,7 +4,7 @@ import { promisify } from 'util';
 import { Request, Response } from 'express';
 import * as presets from '../config/presets';
 import { normalizeState, stateSignature, validPresetName } from '../config/validation';
-import { ConfigState, PresetVersion, DEFAULT_STATE } from '../config/schema';
+import { ConfigState, PresetVersion, DEFAULT_STATE, RoomCorrectionMeta } from '../config/schema';
 import { mixerStatus, mixerCommand } from './mixer-api';
 import { applyConfiguration } from '../adapters/apply-adapter';
 
@@ -14,6 +14,7 @@ const TEST_SPEAKER_DRIVERS = ['Tweeter', 'Woofer', 'PGM_L', 'PGM_R', 'Mic_1', 'M
 /* C1: Test mode mapping — matches DSP core m_testMode values. */
 const TEST_MODE_MAP: Record<string, number> = {
     Woofer: 1, Tweeter: 2, PGM_L: 3, PGM_R: 3,
+    Mic_1: 4, Mic_2: 5, Mic_3: 6, Mic_4: 7, Mic_5: 8, Mic_6: 9,
 };
 
 const kTestCommandPath = '/run/pi-audio/test-command';
@@ -766,8 +767,116 @@ export async function handleTestPgm(req: Request, res: Response): Promise<void> 
        res.status(502).json({ error: 'PGM test requires a running engine.' });
        return;
      }
-     res.status(502).json({ error: 'PGM test failed: unable to communicate with audio engine.' });
-   } catch (e: any) {
-     res.status(500).json({ error: e.message });
-   }
+      res.status(502).json({ error: 'PGM test failed: unable to communicate with audio engine.' });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+}
+
+export async function handleRoomCorrection(req: Request, res: Response): Promise<void> {
+  try {
+    const body = req.body as Record<string, unknown>;
+    const bandsRaw = body.bands as Array<Record<string, unknown>> | undefined;
+    const targetChain = (body.targetChain as string) || 'Both';
+    const presetName = (body.presetName as string) || '';
+    const sourceApp = (body.sourceApp as string) || 'manual';
+
+    if (!bandsRaw || !Array.isArray(bandsRaw) || bandsRaw.length === 0) {
+      res.status(422).json({ error: 'At least one EQ band is required.' });
+      return;
+    }
+
+    /* Validate each band. */
+    const validatedBands: Array<{ frequency: number; q: number; gain: number }> = [];
+    for (const b of bandsRaw) {
+      const freq = Number(b.frequency);
+      const q = Number(b.q);
+      const gain = Number(b.gain);
+
+      if (isNaN(freq) || freq < 20 || freq > 20000) {
+        res.status(422).json({ error: `Invalid frequency ${freq}: must be [20, 20000] Hz.` });
+        return;
+      }
+      if (isNaN(q) || q < 0.1 || q > 100) {
+        res.status(422).json({ error: `Invalid Q ${q}: must be [0.1, 100].` });
+        return;
+      }
+      if (isNaN(gain) || gain < -24 || gain > 24) {
+        res.status(422).json({ error: `Invalid gain ${gain}: must be [-24, 24] dB.` });
+        return;
+      }
+
+      validatedBands.push({ frequency: freq, q, gain });
+    }
+
+    /* Read current staging state. */
+    const session = getSession(req);
+    const name = presetName || session.selectedPreset;
+    if (!validPresetName(name)) {
+      res.status(422).json({ error: 'Select a valid preset before applying correction.' });
+      return;
+    }
+
+    const versions = presets.readPresetVersions(name);
+    let state = normalizeState({}, presets.readState());
+
+    /* Determine target chains. */
+    const targets: string[] = [];
+    if (targetChain === 'Both') {
+      targets.push('Woofer', 'Tweeter');
+    } else if (targetChain === 'Woofer' || targetChain === 'Tweeter') {
+      targets.push(targetChain);
+    } else {
+      res.status(422).json({ error: `Invalid targetChain "${targetChain}": use "Woofer", "Tweeter" or "Both".` });
+      return;
+    }
+
+    /* Replace bands on target chain(s). */
+    for (const chain of targets) {
+      state.bands[chain] = validatedBands.map((b, i) => ({
+        id: `rc-${chain.toLowerCase()}-${i}`,
+        enabled: true,
+        frequency: b.frequency,
+        q: b.q,
+        gain: b.gain,
+      }));
+    }
+
+    /* Update room correction metadata. */
+    const rcMeta: RoomCorrectionMeta = {
+      appliedAt: new Date().toISOString(),
+      sourceApp,
+      bandsApplied: validatedBands.length,
+    };
+    state.roomCorrection = rcMeta;
+
+    /* Save to staging version. */
+    versions.staging = state;
+    presets.savePresetVersions(name, versions);
+    refreshActiveSaved(session, name, 'staging', state);
+
+    session.selectedPreset = name;
+    session.presetVersion = 'staging';
+    const currentJsonWritten = presets.writeCurrentJson(state);
+    session.currentSource = { name, version: 'staging', saved: true };
+
+    /* Trigger engine reload. */
+    try {
+      await fs.promises.writeFile('/run/pi-audio/reload', '1');
+    } catch {
+      // Non-fatal — engine may not be running
+    }
+
+    res.json({
+      state,
+      currentJsonWritten,
+      currentSource: session.currentSource,
+      activeConfiguration: session.activeConfiguration,
+      roomCorrection: rcMeta,
+      bandsApplied: validatedBands.length,
+      targets,
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
 }

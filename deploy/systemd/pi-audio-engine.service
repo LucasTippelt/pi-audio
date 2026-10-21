@@ -6,7 +6,8 @@ After=sound.target pi-audio-ws-server.service
 Type=simple
 RuntimeDirectory=pi-audio
 RuntimeDirectoryMode=0777
-ExecStart=/usr/local/bin/pi-audio-engine /etc/pi-audio/config/current.json /var/log/pi-audio/engine.log --rate 48000 --buffer 512 --capture-dev hw:CARD=UR12,DEV=0 --playback-dev hw:CARD=UR12,DEV=0
+ExecStartPre=/bin/sh -c '/sbin/modprobe snd-aloop || true'
+ExecStart=/usr/local/bin/pi-audio-engine /etc/pi-audio/config/current.json /var/log/pi-audio/engine.log --rate 48000 --buffer 512 --capture-dev hw:CARD=UR12,DEV=0 --playback-dev hw:CARD=UR12,DEV=0 --rc-output-dev loopback
 Restart=on-failure
 RestartSec=10
 User=pi
