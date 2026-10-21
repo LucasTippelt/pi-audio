@@ -49,6 +49,10 @@ public:
     uint32_t actualNumInputs()  const override { return m_numInputs; }
     uint32_t actualNumOutputs() const override { return m_numOutputs; }
 
+    /* Actual negotiated ALSA formats (for format-aware I/O in run()). */
+    snd_pcm_format_t captureFormat() const { return m_captureFmt; }
+    snd_pcm_format_t playbackFormat() const { return m_playbackFmt; }
+
 protected:
     int rtPriority() const override { return 75; }
     bool isTimerPaced() const override;
@@ -77,6 +81,10 @@ private:
     uint32_t m_numInputs  = 0;
     uint32_t m_numOutputs = 0;
 
+    /* Negotiated ALSA formats — tracked for format-aware I/O in run(). */
+    snd_pcm_format_t m_captureFmt  = SND_PCM_FORMAT_S32_LE;
+    snd_pcm_format_t m_playbackFmt = SND_PCM_FORMAT_S32_LE;
+
     bool m_timerPaced = false;
 
     /* Xrun recovery state with gradual fade-in to prevent clicks. */
@@ -97,6 +105,18 @@ private:
     ReopenCallback m_reopenCallback = nullptr;
 
     bool openStreams();
+
+    /* Open a single PCM stream with device fallback (requested → "default").
+     * Returns true if any device opened successfully. Sets the actual device name. */
+    bool openStreamWithFallback(snd_pcm_t** pcm, const char* requestedDevice,
+                                 const char* fallbackDevice, snd_pcm_stream_t stream);
+
+    /* Configure hw_params with format+channel fallback. Tries each (format, channels)
+     * combination until one succeeds. Updates *outFormat and *outChannels on success. */
+    bool configureStreamWithFallback(snd_pcm_t* pcm, uint32_t sampleRate,
+                                      uint32_t bufferSize, uint32_t maxChannels,
+                                      snd_pcm_format_t* outFormat, unsigned int* outChannels);
+
     void recoverUnderrun();
     void recoverOverrun();
 };

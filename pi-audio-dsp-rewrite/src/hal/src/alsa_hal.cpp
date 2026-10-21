@@ -489,91 +489,125 @@ void AlsaHal::requestReopen(uint32_t sampleRate, uint32_t bufferSize) {
 bool AlsaHal::isTimerPaced() const { return m_timerPaced; }
 
 bool AlsaHal::openStreams() {
-    int err;
+    uint32_t reqInputs  = m_numInputs;
+    uint32_t reqOutputs = m_numOutputs;
 
     { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
       if (df) { std::fprintf(df, "[hal] openStreams(%u/%u) cap=%s pb=%s\n", m_sampleRate, m_bufferSize, m_captureDevice, m_playbackDevice); std::fflush(df); std::fclose(df); } }
 
-    /* Open capture non-blocking. */
-    err = snd_pcm_open(&m_pcmCapture, m_captureDevice, SND_PCM_STREAM_CAPTURE, SND_PCM_NONBLOCK);
-    if (err < 0) { std::fprintf(stderr, "[hal] capture open failed: %s\n", snd_strerror(err)); return false; }
-
-    /* Open playback non-blocking. */
-    err = snd_pcm_open(&m_pcmPlayback, m_playbackDevice, SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK);
-    if (err < 0) {
-        std::fprintf(stderr, "[hal] playback open failed: %s\n", snd_strerror(err));
-        snd_pcm_close(m_pcmCapture);
-        return false;
-    }
-
-    /* Set params: S32_LE (hardware native for UR12), interleaved. */
-    snd_pcm_hw_params_t* params;
-    snd_pcm_hw_params_alloca(&params);
-    snd_pcm_hw_params_any(m_pcmPlayback, params);
-    snd_pcm_hw_params_set_access(m_pcmPlayback, params, SND_PCM_ACCESS_RW_INTERLEAVED);
-    snd_pcm_hw_params_set_format(m_pcmPlayback, params, SND_PCM_FORMAT_S32_LE);
-    unsigned int playRate = m_sampleRate;
-    snd_pcm_hw_params_set_rate_near(m_pcmPlayback, params, &playRate, nullptr);
-    snd_pcm_hw_params_set_channels(m_pcmPlayback, params, m_numOutputs);
-
-    /* Set buffer size for ASYNC USB stability. */
+    /* --- Open capture with device fallback (requested → "default"). --- */
     {
-        snd_pcm_uframes_t periodSize = m_bufferSize;
-        snd_pcm_uframes_t bufferSize = m_bufferSize * 4;
-        snd_pcm_hw_params_set_period_size_near(m_pcmPlayback, params, &periodSize, nullptr);
-        snd_pcm_hw_params_set_buffer_size_near(m_pcmPlayback, params, &bufferSize);
-    }
+        unsigned int ch = 0;
+        snd_pcm_format_t fmt = SND_PCM_FORMAT_UNKNOWN;
 
-    err = snd_pcm_hw_params(m_pcmPlayback, params);
-    if (err < 0) {
-        std::fprintf(stderr, "[hal] playback hw_params failed: %s\n", snd_strerror(err));
-        close();
-        return false;
-    }
-
-    /* Apply same params to capture — use fresh object.
-     * Try requested channel count first, then fall back to fewer channels
-     * if the hardware doesn't support it (e.g. UR12 has 2 inputs, not 4). */
-    {
-        uint32_t reqChannels = m_numInputs;
-        bool capOk = false;
-
-        for (uint32_t tryCh = reqChannels; tryCh >= 1; --tryCh) {
-            snd_pcm_hw_params_t* capParams;
-            snd_pcm_hw_params_alloca(&capParams);
-            snd_pcm_hw_params_any(m_pcmCapture, capParams);
-            snd_pcm_hw_params_set_access(m_pcmCapture, capParams, SND_PCM_ACCESS_RW_INTERLEAVED);
-            snd_pcm_hw_params_set_format(m_pcmCapture, capParams, SND_PCM_FORMAT_S32_LE);
-            unsigned int capRate = m_sampleRate;
-            snd_pcm_hw_params_set_rate_near(m_pcmCapture, capParams, &capRate, nullptr);
-            snd_pcm_hw_params_set_channels(m_pcmCapture, capParams, tryCh);
-
-            /* Set buffer size for ASYNC USB stability. */
-            {
-                snd_pcm_uframes_t periodSize = m_bufferSize;
-                snd_pcm_uframes_t bufferSize = m_bufferSize * 4;
-                snd_pcm_hw_params_set_period_size_near(m_pcmCapture, capParams, &periodSize, nullptr);
-                snd_pcm_hw_params_set_buffer_size_near(m_pcmCapture, capParams, &bufferSize);
+        if (!openStreamWithFallback(&m_pcmCapture, m_captureDevice, "default",
+                                     SND_PCM_STREAM_CAPTURE)) {
+            std::fprintf(stderr, "[hal] capture open failed (all devices tried)\n");
+            return false;
+        }
+        /* Try hw formats first. If none work, fall back to plug: for auto-conversion. */
+        if (!configureStreamWithFallback(m_pcmCapture, m_sampleRate, m_bufferSize,
+                                          reqInputs, &fmt, &ch)) {
+            std::fprintf(stderr, "[hal] capture hw_params failed — trying plug: converter\n");
+            snd_pcm_close(m_pcmCapture);
+            /* Reopen with plug: prefix for automatic format conversion. */
+            char devName[256];
+            (void)std::snprintf(devName, sizeof(devName), "plug:%s", m_captureDevice);
+            if (snd_pcm_open(&m_pcmCapture, devName, SND_PCM_STREAM_CAPTURE, 0) < 0) {
+                std::fprintf(stderr, "[hal] capture plug: open failed\n");
+                return false;
             }
-
-            err = snd_pcm_hw_params(m_pcmCapture, capParams);
-            if (err >= 0) {
-                m_numInputs = tryCh;
-                capOk = true;
-                if (tryCh < reqChannels) {
-                    std::fprintf(stderr, "[hal] capture channels fallback: requested %u, got %u\n",
-                                  reqChannels, tryCh);
-                }
-                break;
+            /* On plug device, just set S32_LE directly — it converts. */
+            if (!configureStreamWithFallback(m_pcmCapture, m_sampleRate, m_bufferSize,
+                                              reqInputs, &fmt, &ch)) {
+                std::fprintf(stderr, "[hal] capture hw_params failed (even with plug:)\n");
+                close();
+                return false;
             }
         }
+        if (fmt != SND_PCM_FORMAT_S32_LE) {
+            std::fprintf(stderr, "[hal] capture format conversion: %s → S32_LE\n",
+                          snd_pcm_format_name(fmt));
+        }
+        m_captureFmt = fmt;
+        m_numInputs  = ch;
+    }
 
-        if (!capOk) {
-            std::fprintf(stderr, "[hal] capture hw_params failed (all channel counts tried): %s\n",
-                          snd_strerror(err));
+    /* --- Open playback with device fallback. --- */
+    {
+        unsigned int ch = 0;
+        snd_pcm_format_t fmt = SND_PCM_FORMAT_UNKNOWN;
+
+        if (!openStreamWithFallback(&m_pcmPlayback, m_playbackDevice, "default",
+                                     SND_PCM_STREAM_PLAYBACK)) {
+            std::fprintf(stderr, "[hal] playback open failed (all devices tried)\n");
             close();
             return false;
         }
+        /* Try hw formats first. If none work, fall back to plug: for auto-conversion. */
+        if (!configureStreamWithFallback(m_pcmPlayback, m_sampleRate, m_bufferSize,
+                                          reqOutputs, &fmt, &ch)) {
+            std::fprintf(stderr, "[hal] playback hw_params failed — trying plug: converter\n");
+            snd_pcm_close(m_pcmPlayback);
+            /* Reopen with plug: prefix for automatic format conversion. */
+            char devName[256];
+            (void)std::snprintf(devName, sizeof(devName), "plug:%s", m_playbackDevice);
+            if (snd_pcm_open(&m_pcmPlayback, devName, SND_PCM_STREAM_PLAYBACK, 0) < 0) {
+                std::fprintf(stderr, "[hal] playback plug: open failed\n");
+                close();
+                return false;
+            }
+            /* On plug device, just set S32_LE directly — it converts. */
+            if (!configureStreamWithFallback(m_pcmPlayback, m_sampleRate, m_bufferSize,
+                                              reqOutputs, &fmt, &ch)) {
+                std::fprintf(stderr, "[hal] playback hw_params failed (even with plug:)\n");
+                close();
+                return false;
+            }
+        }
+        if (fmt != SND_PCM_FORMAT_S32_LE) {
+            std::fprintf(stderr, "[hal] playback format conversion: %s → S32_LE\n",
+                          snd_pcm_format_name(fmt));
+        }
+        m_playbackFmt = fmt;
+        m_numOutputs  = ch;
+    }
+
+    /* Log negotiated parameters. */
+    {
+        auto logStream = [](const char* label, snd_pcm_t* pcm, uint32_t reqCh,
+                            uint32_t sampleRate, uint32_t bufferSize) {
+            snd_pcm_hw_params_t* cur;
+            snd_pcm_hw_params_alloca(&cur);
+            if (snd_pcm_hw_params_current(pcm, cur) < 0) return;
+
+            unsigned int rate = 0, ch = 0;
+            snd_pcm_uframes_t period = 0, buf = 0;
+            snd_pcm_format_t fmt = SND_PCM_FORMAT_UNKNOWN;
+            snd_pcm_hw_params_get_rate(cur, &rate, nullptr);
+            snd_pcm_hw_params_get_channels(cur, &ch);
+            snd_pcm_hw_params_get_period_size(cur, &period, NULL);
+            snd_pcm_hw_params_get_buffer_size(cur, &buf);
+            snd_pcm_hw_params_get_format(cur, &fmt);
+
+            if (ch != reqCh) {
+                std::fprintf(stderr, "[hal] WARNING: %s channels negotiated %u (requested %u)\n",
+                              label, ch, reqCh);
+            }
+            if (fmt != SND_PCM_FORMAT_S32_LE) {
+                std::fprintf(stderr, "[hal] WARNING: %s format is %s (expected S32_LE — conversion active)\n",
+                              label, snd_pcm_format_name(fmt));
+            }
+            std::printf("[hal] ALSA %s confirmed: %u Hz / %u ch / period=%lu / buffer=%lu / %s\n",
+                        label, rate, ch, (unsigned long)period, (unsigned long)buf,
+                        snd_pcm_format_name(fmt));
+        };
+
+        logStream("playback", m_pcmPlayback, reqOutputs, m_sampleRate, m_bufferSize);
+        logStream("capture",  m_pcmCapture,  reqInputs,  m_sampleRate, m_bufferSize);
+
+        snd_pcm_sframes_t delay;
+        snd_pcm_delay(m_pcmPlayback, &delay);
     }
 
     /* NO LINK — streams operate independently on ASYNC USB. */
@@ -583,7 +617,7 @@ bool AlsaHal::openStreams() {
         int rcErr = snd_pcm_open(&m_pcmRcCapture, m_rcInputDevice, SND_PCM_STREAM_CAPTURE, SND_PCM_NONBLOCK);
         if (rcErr < 0) {
             std::fprintf(stderr, "[hal] RC capture open failed (%s): %s — disabling RC input\n",
-                         m_rcInputDevice, snd_strerror(rcErr));
+                          m_rcInputDevice, snd_strerror(rcErr));
             m_pcmRcCapture = nullptr;
         } else {
             snd_pcm_hw_params_t* rcParams;
@@ -623,7 +657,7 @@ bool AlsaHal::openStreams() {
         int rcErr = snd_pcm_open(&m_pcmRcPlayback, m_rcOutputDevice, SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK);
         if (rcErr < 0) {
             std::fprintf(stderr, "[hal] RC playback open failed (%s): %s — disabling RC output\n",
-                         m_rcOutputDevice, snd_strerror(rcErr));
+                          m_rcOutputDevice, snd_strerror(rcErr));
             m_pcmRcPlayback = nullptr;
         } else {
             snd_pcm_hw_params_t* rcParams;
@@ -655,89 +689,79 @@ bool AlsaHal::openStreams() {
         }
     }
 
-    /* Verify actual negotiated parameters — query BOTH streams for channels,
-     * rate, format, period and buffer. Update m_numInputs/m_numOutputs with
-     * the real hardware values so buffer allocation matches what ALSA delivers. */
-    {
-        uint32_t reqInputs = m_numInputs;   /* save requested before overwrite */
-        uint32_t reqOutputs = m_numOutputs;
-
-        /* --- Playback stream --- */
-        {
-            snd_pcm_hw_params_t* cur;
-            snd_pcm_hw_params_alloca(&cur);
-            snd_pcm_hw_params_current(m_pcmPlayback, cur);
-
-            unsigned int actualRate = 0;
-            unsigned int actualCh = 0;
-            snd_pcm_uframes_t actualPeriod = 0, actualBuffer = 0;
-            snd_pcm_format_t actualFmt = SND_PCM_FORMAT_UNKNOWN;
-            snd_pcm_hw_params_get_rate(cur, &actualRate, nullptr);
-            snd_pcm_hw_params_get_channels(cur, &actualCh);
-            snd_pcm_hw_params_get_period_size(cur, &actualPeriod, NULL);
-            snd_pcm_hw_params_get_buffer_size(cur, &actualBuffer);
-            snd_pcm_hw_params_get_format(cur, &actualFmt);
-
-            m_numOutputs = actualCh;
-            m_sampleRate = actualRate;
-
-            if (actualCh != reqOutputs) {
-                std::fprintf(stderr, "[hal] WARNING: playback channels negotiated %u (requested %u)\n",
-                              actualCh, reqOutputs);
-            }
-            if (actualFmt != SND_PCM_FORMAT_S32_LE) {
-                std::fprintf(stderr, "[hal] ERROR: playback format is %s (expected S32_LE)\n",
-                              snd_pcm_format_name(actualFmt));
-            }
-            if (actualRate != m_sampleRate || actualPeriod != m_bufferSize) {
-                std::fprintf(stderr, "[hal] WARNING: ALSA negotiated %u Hz / period=%lu / buffer=%lu\n",
-                              actualRate, (unsigned long)actualPeriod, (unsigned long)actualBuffer);
-            } else {
-                std::printf("[hal] ALSA playback confirmed: %u Hz / %u ch / period=%lu / buffer=%lu / %s\n",
-                            actualRate, actualCh, (unsigned long)actualPeriod,
-                            (unsigned long)actualBuffer, snd_pcm_format_name(actualFmt));
-            }
-        }
-
-        /* --- Capture stream --- */
-        {
-            snd_pcm_hw_params_t* cur;
-            snd_pcm_hw_params_alloca(&cur);
-            snd_pcm_hw_params_current(m_pcmCapture, cur);
-
-            unsigned int actualRate = 0;
-            unsigned int actualCh = 0;
-            snd_pcm_uframes_t actualPeriod = 0, actualBuffer = 0;
-            snd_pcm_format_t actualFmt = SND_PCM_FORMAT_UNKNOWN;
-            snd_pcm_hw_params_get_rate(cur, &actualRate, nullptr);
-            snd_pcm_hw_params_get_channels(cur, &actualCh);
-            snd_pcm_hw_params_get_period_size(cur, &actualPeriod, NULL);
-            snd_pcm_hw_params_get_buffer_size(cur, &actualBuffer);
-            snd_pcm_hw_params_get_format(cur, &actualFmt);
-
-            m_numInputs = actualCh;
-
-            if (actualCh != reqInputs) {
-                std::fprintf(stderr, "[hal] WARNING: capture channels negotiated %u (requested %u)\n",
-                              actualCh, reqInputs);
-            }
-            if (actualFmt != SND_PCM_FORMAT_S32_LE) {
-                std::fprintf(stderr, "[hal] ERROR: capture format is %s (expected S32_LE)\n",
-                              snd_pcm_format_name(actualFmt));
-            }
-            std::printf("[hal] ALSA capture confirmed: %u Hz / %u ch / period=%lu / buffer=%lu / %s\n",
-                        actualRate, actualCh, (unsigned long)actualPeriod,
-                        (unsigned long)actualBuffer, snd_pcm_format_name(actualFmt));
-        }
-
-        /* Get delay for fixed latency offset. */
-        snd_pcm_sframes_t delay;
-        snd_pcm_delay(m_pcmPlayback, &delay);
-    }
-
     { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
       if (df) { std::fprintf(df, "[hal] openStreams() OK\n"); std::fflush(df); std::fclose(df); } }
     return true;
+}
+
+/* Open a single PCM stream with device fallback.
+ * Tries requestedDevice first, then fallbackDevice (typically "default"). */
+bool AlsaHal::openStreamWithFallback(snd_pcm_t** pcm, const char* requestedDevice,
+                                      const char* fallbackDevice, snd_pcm_stream_t stream) {
+    int err = snd_pcm_open(pcm, requestedDevice, stream, SND_PCM_NONBLOCK);
+    if (err >= 0) return true;
+
+    /* Requested device failed — try fallback. */
+    std::fprintf(stderr, "[hal] %s open failed for '%s': %s — trying '%s'\n",
+                  stream == SND_PCM_STREAM_CAPTURE ? "capture" : "playback",
+                  requestedDevice, snd_strerror(err), fallbackDevice);
+
+    err = snd_pcm_open(pcm, fallbackDevice, stream, SND_PCM_NONBLOCK);
+    if (err >= 0) {
+        std::fprintf(stderr, "[hal] %s opened fallback device '%s'\n",
+                      stream == SND_PCM_STREAM_CAPTURE ? "capture" : "playback",
+                      fallbackDevice);
+        return true;
+    }
+    std::fprintf(stderr, "[hal] %s open failed for '%s': %s\n",
+                  stream == SND_PCM_STREAM_CAPTURE ? "capture" : "playback",
+                  fallbackDevice, snd_strerror(err));
+    return false;
+}
+
+/* Configure hw_params with format + channel fallback.
+ * Tries formats: S32_LE → S24_3LE → S24_LE → S16_LE
+ * For each format, tries channels from maxChannels down to 1. */
+bool AlsaHal::configureStreamWithFallback(snd_pcm_t* pcm, uint32_t sampleRate,
+                                           uint32_t bufferSize, uint32_t maxChannels,
+                                           snd_pcm_format_t* outFormat, unsigned int* outChannels) {
+    /* Format priority list — prefer formats that match our internal S32_LE processing. */
+    static const snd_pcm_format_t fmtOrder[] = {
+        SND_PCM_FORMAT_S32_LE,
+        SND_PCM_FORMAT_S24_3LE,
+        SND_PCM_FORMAT_S24_LE,
+        SND_PCM_FORMAT_S16_LE,
+    };
+    static constexpr int kNumFormats = sizeof(fmtOrder) / sizeof(fmtOrder[0]);
+
+    for (int fi = 0; fi < kNumFormats; ++fi) {
+        for (unsigned int tryCh = maxChannels; tryCh >= 1; --tryCh) {
+            snd_pcm_hw_params_t* params;
+            snd_pcm_hw_params_alloca(&params);
+            snd_pcm_hw_params_any(pcm, params);
+            snd_pcm_hw_params_set_access(pcm, params, SND_PCM_ACCESS_RW_INTERLEAVED);
+            snd_pcm_hw_params_set_format(pcm, params, fmtOrder[fi]);
+
+            unsigned int rate = sampleRate;
+            snd_pcm_hw_params_set_rate_near(pcm, params, &rate, nullptr);
+            snd_pcm_hw_params_set_channels(pcm, params, tryCh);
+
+            {
+                snd_pcm_uframes_t periodSize = bufferSize;
+                snd_pcm_uframes_t bufSize = bufferSize * 4;
+                snd_pcm_hw_params_set_period_size_near(pcm, params, &periodSize, nullptr);
+                snd_pcm_hw_params_set_buffer_size_near(pcm, params, &bufSize);
+            }
+
+            int err = snd_pcm_hw_params(pcm, params);
+            if (err >= 0) {
+                *outFormat  = fmtOrder[fi];
+                *outChannels = tryCh;
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 void AlsaHal::recoverUnderrun() {
