@@ -45,6 +45,10 @@ public:
     uint32_t xrunUnderrunCount() const override { return m_xrunUnderrun; }
     uint32_t xrunOverrunCount()  const override { return m_xrunOverrun; }
 
+    /* Actual negotiated channel counts after open(). */
+    uint32_t actualNumInputs()  const override { return m_numInputs; }
+    uint32_t actualNumOutputs() const override { return m_numOutputs; }
+
 protected:
     int rtPriority() const override { return 75; }
     bool isTimerPaced() const override;

@@ -32,6 +32,10 @@ public:
     uint32_t xrunUnderrunCount() const override { return m_xrunUnderrun; }
     uint32_t xrunOverrunCount()  const override { return m_xrunOverrun; }
 
+    /* Actual negotiated channel counts (SimHal always matches requested). */
+    uint32_t actualNumInputs()  const override { return m_numInputs; }
+    uint32_t actualNumOutputs() const override { return m_numOutputs; }
+
     /* Test-only injection methods — simulate xrun conditions for B4 testing. */
     void injectUnderrun();
     void injectOverrun();

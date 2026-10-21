@@ -200,6 +200,18 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    /* Re-init DSP core with actual negotiated channel counts.
+     * Hardware may negotiate fewer channels than requested (e.g. UR12 has 2 inputs, not 4). */
+    {
+        uint32_t actualInputs  = hal->actualNumInputs();
+        uint32_t actualOutputs = hal->actualNumOutputs();
+        if (actualInputs != kDefaultNumInputs || actualOutputs != kDefaultNumOutputs) {
+            std::printf("[engine] Adjusting channels: %u/%u -> %u/%u\n",
+                        kDefaultNumInputs, kDefaultNumOutputs, actualInputs, actualOutputs);
+            engine.core().init(sampleRate, bufferSize, actualInputs, actualOutputs);
+        }
+    }
+
     /* --- Create /run/pi-audio/ directory and sentinel for status adapter. --- */
     {
         mkdir("/run/pi-audio", 0777);

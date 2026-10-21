@@ -29,6 +29,11 @@ public:
     virtual uint32_t xrunUnderrunCount() const { return 0; }
     virtual uint32_t xrunOverrunCount()  const { return 0; }
 
+    /* Actual negotiated channel counts after open(). May differ from requested
+     * if the hardware doesn't support the exact count asked for. */
+    virtual uint32_t actualNumInputs()  const { return 0; }
+    virtual uint32_t actualNumOutputs() const { return 0; }
+
 protected:
     Engine* m_engine = nullptr;
 
