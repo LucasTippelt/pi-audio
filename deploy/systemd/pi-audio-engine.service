@@ -1,0 +1,17 @@
+[Unit]
+Description=Pi Audio DSP Engine
+After=sound.target pi-audio-ws-server.service
+
+[Service]
+Type=simple
+RuntimeDirectory=pi-audio
+RuntimeDirectoryMode=0777
+ExecStart=/usr/local/bin/pi-audio-engine /etc/pi-audio/config/current.json /var/log/pi-audio/engine.log --rate 48000 --buffer 512 --capture-dev hw:CARD=UR12,DEV=0 --playback-dev hw:CARD=UR12,DEV=0
+Restart=on-failure
+RestartSec=10
+User=pi
+Group=audio
+LimitMEMLOCK=67108864
+
+[Install]
+WantedBy=multi-user.target

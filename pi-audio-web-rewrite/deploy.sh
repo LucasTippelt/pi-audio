@@ -3,13 +3,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$SCRIPT_DIR"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SERVICE_NAME="pi-audio-web"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+SYSTEMD_DIR="$REPO_ROOT/deploy/systemd"
 
 echo "=== Pi Audio Web Rewrite Deployment ==="
 
 # Build TypeScript
-echo "[1/4] Building TypeScript..."
+echo "[1/5] Building TypeScript..."
 cd "$PROJECT_DIR"
 npm ci --prefer-offline 2>/dev/null || npm install
 npx tsc
@@ -18,8 +20,8 @@ npx tsc
 cp -r src/frontend dist/
 
 # Install systemd service
-echo "[2/4] Installing systemd service..."
-sudo cp "$SCRIPT_DIR/deploy/${SERVICE_NAME}.service" "$SERVICE_FILE"
+echo "[2/5] Installing systemd service..."
+sudo cp "$SYSTEMD_DIR/${SERVICE_NAME}.service" "$SERVICE_FILE"
 sudo systemctl daemon-reload
 
 # Stop old PHP web server if running
@@ -29,7 +31,7 @@ if sudo systemctl is-active --quiet pi-audio-web-old 2>/dev/null; then
 fi
 
 # Disable Apache (serves old PHP interface on port 80)
-echo "[2.5/4] Disabling Apache..."
+echo "[3/5] Disabling Apache..."
 sudo systemctl stop apache2 || true
 sudo systemctl disable apache2 || true
 sudo a2dissite pi-audio.conf || true
@@ -38,12 +40,19 @@ sudo a2dissite pi-audio.conf || true
 echo "    Setting capabilities on Node.js..."
 sudo setcap 'cap_net_bind_service=+ep' "$(which node)"
 
+# Ensure engine service is running (web requires it)
+if ! sudo systemctl is-active --quiet pi-audio-engine; then
+  echo "[3.5/5] Starting pi-audio-engine (required dependency)..."
+  sudo systemctl start pi-audio-engine
+  sleep 2
+fi
+
 # Restart new service
-echo "[3/4] Starting ${SERVICE_NAME}..."
+echo "[4/5] Starting ${SERVICE_NAME}..."
 sudo systemctl restart "$SERVICE_NAME"
 
 # Verify
-echo "[4/4] Verifying service..."
+echo "[5/5] Verifying service..."
 sleep 1
 if sudo systemctl is-active --quiet "$SERVICE_NAME"; then
   echo "    Service is running."
