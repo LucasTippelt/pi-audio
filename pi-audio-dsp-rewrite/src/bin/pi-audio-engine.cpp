@@ -582,6 +582,9 @@ int main(int argc, char* argv[]) {
                 std::strncpy(curPlayback, newPlayback, sizeof(curPlayback) - 1);
                 /* Report device change to StateWriter. */
                 stateWriter.setAppliedDevices(newCapture, newPlayback);
+                /* Force HAL to close old streams and reopen with new device names.
+                 * Passing (0, 0) keeps current sample rate and buffer size. */
+                alsaHal->requestReopen(0, 0);
             }
 
             /* If sample rate or buffer size changed, signal HAL reopen with new params.
