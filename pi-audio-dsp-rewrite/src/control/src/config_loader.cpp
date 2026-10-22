@@ -33,12 +33,76 @@ static const char* jsonFindKey(const char* json, size_t len, const char* key) {
     return nullptr;
 }
 
+/* Find a key only at the top level of the JSON object (depth 0).
+ * This avoids matching keys inside nested objects/arrays.            */
+static const char* jsonFindKeyTop(const char* json, size_t len, const char* key) {
+    char pattern[128];
+    snprintf(pattern, sizeof(pattern), "\"%s\"", key);
+    size_t klen = strlen(pattern);
+
+    const char* p = json;
+    const char* end = json + len;
+    int depth = 0;
+
+    while (p < end) {
+        p = strstr(p, pattern);
+        if (!p) return nullptr;
+
+        /* Check this is actually a key (followed by optional whitespace then ':'). */
+        const char* after = p + klen;
+        while (*after == ' ' || *after == '\t' || *after == '\n' || *after == '\r') ++after;
+        if (*after == ':') {
+            /* Verify we're at the top level by counting braces before this match. */
+            int d = 0;
+            const char* scan = json;
+            while (scan < p) {
+                if (*scan == '{') ++d;
+                else if (*scan == '}') --d;
+                else if (*scan == '[') ++d;
+                else if (*scan == ']') --d;
+                else if (*scan == '"') {
+                    /* Skip string content to avoid counting braces inside strings. */
+                    ++scan;
+                    while (scan < end && *scan != '"') {
+                        if (*scan == '\\') ++scan;
+                        ++scan;
+                    }
+                }
+                ++scan;
+            }
+            /* Top-level key: we're inside exactly one object (the root). */
+            if (d <= 1) return after + 1;
+        }
+        ++p;
+    }
+    return nullptr;
+}
+
 static void skipWhitespace(const char*& p) {
     while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') ++p;
 }
 
 bool ConfigLoader::jsonGetFloat(const char* json, size_t len, const char* key, float* out) {
     const char* val = jsonFindKey(json, len, key);
+    if (!val) return false;
+    skipWhitespace(val);
+    /* Skip "null". */
+    if (strncmp(val, "null", 4) == 0) return false;
+    /* Handle array value like [0.5, 0.75] — take first element. */
+    if (*val == '[') {
+        ++val;
+        skipWhitespace(val);
+    }
+    char* end = nullptr;
+    double d = strtod(val, &end);
+    if (end == val) return false;
+    *out = static_cast<float>(d);
+    return true;
+}
+
+/* Like jsonGetFloat but only matches keys at the top level of the JSON object. */
+static bool jsonGetFloatTop(const char* json, size_t len, const char* key, float* out) {
+    const char* val = jsonFindKeyTop(json, len, key);
     if (!val) return false;
     skipWhitespace(val);
     /* Skip "null". */
@@ -286,9 +350,10 @@ bool ConfigLoader::parseJson(const char* json, size_t len, FullConfig& cfg) {
         }
     }
 
-    /* --- Gain (backward compatibility: single gain value). --- */
+    /* --- Gain (backward compatibility: single gain value at top level only).
+     * Use jsonGetFloatTop to avoid matching "gain" inside nested band objects. */
     float singleGain = 1.0f;
-    if (jsonGetFloat(json, len, "gain", &singleGain)) {
+    if (jsonGetFloatTop(json, len, "gain", &singleGain)) {
         cfg.inputGain[0]   = singleGain;
         cfg.outputGain[0]  = singleGain;
         cfg.inputGainCount  = 1;
@@ -354,25 +419,123 @@ bool ConfigLoader::parseJson(const char* json, size_t len, FullConfig& cfg) {
                 float cutoffHz = 0, qVal = 0.707f, gainDb = 0;
                 int64_t targetCh = 0;
 
-                { float tmp; if (jsonGetFloat(objStr.c_str(), objLen, "cutoffHz", &tmp)) cutoffHz = tmp; }
+                { float tmp; if (jsonGetFloat(objStr.c_str(), objLen, "cutoffHz", &tmp)) cutoffHz = tmp; else { float tmp2; if (jsonGetFloat(objStr.c_str(), objLen, "frequency", &tmp2)) cutoffHz = tmp2; } }
                 { float tmp; if (jsonGetFloat(objStr.c_str(), objLen, "q", &tmp)) qVal = tmp; }
-                { float tmp; if (jsonGetFloat(objStr.c_str(), objLen, "gainDb", &tmp)) gainDb = tmp; }
+                { float tmp; if (jsonGetFloat(objStr.c_str(), objLen, "gainDb", &tmp)) gainDb = tmp; else { float tmp2; if (jsonGetFloat(objStr.c_str(), objLen, "gain", &tmp2)) gainDb = tmp2; } }
                 { int64_t tmp; if (jsonGetInt(objStr.c_str(), objLen, "targetChannel", &tmp)) targetCh = tmp; }
 
                 /* Precompute biquad coefficients. */
-                float b0 = 0, b1 = 0, b2 = 0, a1 = 0, a2 = 0;
+                float b0 = 1.f, b1 = 0.f, b2 = 0.f, a1 = 0.f, a2 = 0.f;
+                cfg.bands[i].enabled = 1;
                 if (precomputeBiquadCoeffs(cutoffHz, cfg.sampleRate, qVal, gainDb,
                                            &b0, &b1, &b2, &a1, &a2)) {
-                    cfg.bands[i].b0 = b0;
-                    cfg.bands[i].b1 = b1;
-                    cfg.bands[i].b2 = b2;
-                    cfg.bands[i].a1 = a1;
-                    cfg.bands[i].a2 = a2;
                     cfg.bands[i].targetChannel = static_cast<uint32_t>(targetCh >= 0 ? targetCh : 0);
+                } else {
+                    /* Invalid band — use pass-through coefficients. */
+                    cfg.bands[i].enabled = 0;
+                    cfg.bands[i].targetChannel = static_cast<uint32_t>(targetCh >= 0 ? targetCh : 0);
+                    { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+                      if (df) { std::fprintf(df, "[config] precomputeBiquadCoeffs FAIL band[%u]: freq=%.1f q=%.4f gainDb=%.1f sr=%u\n",
+                               (unsigned)i, cutoffHz, qVal, gainDb, (unsigned)cfg.sampleRate); std::fclose(df); } }
                 }
+                cfg.bands[i].b0 = b0;
+                cfg.bands[i].b1 = b1;
+                cfg.bands[i].b2 = b2;
+                cfg.bands[i].a1 = a1;
+                cfg.bands[i].a2 = a2;
 
                 skipWhitespace(p);
                 if (*p == ',') ++p;
+            }
+        }
+    }
+
+    /* --- Bands: WebUI-style object fallback (bands: {Woofer: [...], Tweeter: [...]}) --- */
+    if (cfg.bandCount == 0) {
+        const char* bandsVal = jsonFindKey(json, len, "bands");
+        if (bandsVal) {
+            skipWhitespace(bandsVal);
+            if (*bandsVal == '{') {
+                /* Find the closing brace of the bands object. */
+                const char* objStart = bandsVal;
+                int depth = 1;
+                ++bandsVal;
+                while (*bandsVal && depth > 0) {
+                    if (*bandsVal == '{') ++depth;
+                    else if (*bandsVal == '}') --depth;
+                    ++bandsVal;
+                }
+
+                std::string bandsObj(objStart, bandsVal - objStart);
+                size_t bandsLen = bandsObj.size();
+
+                /* Parse each driver sub-key. */
+                auto parseDriverBands = [&](const char* driverName, uint32_t targetChannel,
+                                            uint32_t startIdx) -> uint32_t {
+                    char pattern[64];
+                    snprintf(pattern, sizeof(pattern), "\"%s\"", driverName);
+                    const char* slot = strstr(bandsObj.c_str(), pattern);
+                    if (!slot) return startIdx;
+                    slot += strlen(pattern);
+                    skipWhitespace(slot);
+                    if (*slot == ':') ++slot;
+                    skipWhitespace(slot);
+                    if (*slot != '[') return startIdx;
+
+                    int count = jsonArrayCount(slot);
+                    uint32_t endIdx = std::min(startIdx + static_cast<uint32_t>(count), FullConfig::kMaxBands);
+
+                    const char* p = slot + 1;
+                    for (uint32_t i = startIdx; i < endIdx && *p && *p != ']'; ++i) {
+                        skipWhitespace(p);
+                        if (*p != '{') break;
+
+                        const char* objS = p;
+                        int d = 1;
+                        ++p;
+                        while (*p && d > 0) {
+                            if (*p == '{') ++d;
+                            else if (*p == '}') --d;
+                            ++p;
+                        }
+                        const char* objE = p;
+
+                        std::string bObj(objS, objE - objS);
+                        size_t bLen = bObj.size();
+
+                        float freqHz = 0, qVal = 0.707f, gainDb = 0;
+                        bool enabled = true;
+
+                        { float tmp; if (jsonGetFloat(bObj.c_str(), bLen, "frequency", &tmp)) freqHz = tmp; else { float tmp2; jsonGetFloat(bObj.c_str(), bLen, "cutoffHz", &tmp2); freqHz = tmp2; } }
+                        { float tmp; if (jsonGetFloat(bObj.c_str(), bLen, "q", &tmp)) qVal = tmp; }
+                        { float tmp; if (jsonGetFloat(bObj.c_str(), bLen, "gain", &tmp)) gainDb = tmp; else { float tmp2; jsonGetFloat(bObj.c_str(), bLen, "gainDb", &tmp2); gainDb = tmp2; } }
+                        { bool tmp; if (jsonGetBool(bObj.c_str(), bLen, "enabled", &tmp)) enabled = tmp; }
+
+                        float b0 = 0, b1 = 0, b2 = 0, a1 = 0, a2 = 0;
+                        if (enabled && freqHz > 0) {
+                            precomputeBiquadCoeffs(freqHz, cfg.sampleRate, qVal, gainDb, &b0, &b1, &b2, &a1, &a2);
+                        } else {
+                            /* Pass-through coefficients for disabled/invalid bands. */
+                            b0 = 1.f;
+                        }
+
+                        cfg.bands[i].b0 = b0;
+                        cfg.bands[i].b1 = b1;
+                        cfg.bands[i].b2 = b2;
+                        cfg.bands[i].a1 = a1;
+                        cfg.bands[i].a2 = a2;
+                        cfg.bands[i].targetChannel = targetChannel;
+                        cfg.bands[i].enabled = static_cast<uint8_t>(enabled ? 1 : 0);
+
+                        skipWhitespace(p);
+                        if (*p == ',') ++p;
+                    }
+                    return endIdx;
+                };
+
+                uint32_t idx = parseDriverBands("Woofer", 0, 0);
+                idx = parseDriverBands("Tweeter", 1, idx);
+                cfg.bandCount = idx;
             }
         }
     }
@@ -616,6 +779,8 @@ bool ConfigLoader::load(const char* jsonPath, CmdLoadParams& outParams) {
     FILE* f = std::fopen(jsonPath, "r");
     if (!f) {
         setLastError(CONFIG_ERR_FILE);
+        { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+          if (df) { std::fprintf(df, "[config] load FAIL: cannot open %s\n", jsonPath); std::fclose(df); } }
         return false;
     }
 
@@ -627,6 +792,8 @@ bool ConfigLoader::load(const char* jsonPath, CmdLoadParams& outParams) {
     if (fileSize <= 0 || fileSize > 65536) {
         std::fclose(f);
         setLastError(CONFIG_ERR_PARSE);
+        { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+          if (df) { std::fprintf(df, "[config] load FAIL: file size %ld out of range\n", fileSize); std::fclose(df); } }
         return false;
     }
 
@@ -646,14 +813,19 @@ bool ConfigLoader::load(const char* jsonPath, CmdLoadParams& outParams) {
     if (!parseJson(buf, len, cfg)) {
         std::free(buf);
         setLastError(CONFIG_ERR_PARSE);
+        { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+          if (df) { std::fprintf(df, "[config] load FAIL: parseJson returned false\n"); std::fclose(df); } }
         return false;
     }
+
     std::free(buf);
 
     /* Validate. */
     ConfigError err = validate(cfg);
     if (err != CONFIG_OK) {
         setLastError(err);
+        { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+          if (df) { std::fprintf(df, "[config] load FAIL: validation error %u\n", (unsigned)err); std::fclose(df); } }
         return false;
     }
 
@@ -710,12 +882,17 @@ bool ConfigLoader::load(const char* jsonPath, CmdLoadParams& outParams) {
                        &cfg.outputGain[i], sizeof(float))) break;
     }
 
-    /* Pack IIR coefficient entries. */
+    /* Pack IIR coefficient entries (5 floats + 1 byte enabled flag). */
     for (uint32_t i = 0; i < cfg.bandCount; ++i) {
-        float coeffs[5] = { cfg.bands[i].b0, cfg.bands[i].b1, cfg.bands[i].b2,
-                            cfg.bands[i].a1, cfg.bands[i].a2 };
+        uint8_t payload[24];
+        std::memcpy(payload, &cfg.bands[i].b0, sizeof(float));
+        std::memcpy(payload + 4, &cfg.bands[i].b1, sizeof(float));
+        std::memcpy(payload + 8, &cfg.bands[i].b2, sizeof(float));
+        std::memcpy(payload + 12, &cfg.bands[i].a1, sizeof(float));
+        std::memcpy(payload + 16, &cfg.bands[i].a2, sizeof(float));
+        payload[20] = cfg.bands[i].enabled;
         if (!packEntry(STAGE_PARAM_IIR_COEF, static_cast<uint16_t>(cfg.bands[i].targetChannel),
-                       coeffs, sizeof(coeffs))) break;
+                       payload, 21)) break;
     }
 
     /* Pack delay entries. */
@@ -776,8 +953,11 @@ bool ConfigLoader::load(const char* jsonPath, CmdLoadParams& outParams) {
         float foCoef = 0.f;
 
         if (!precomputeCrossoverCoeffs(cx.frequencyHz, cfg.sampleRate,
-                                       ftype, topo, cx.slopeDbOct,
-                                       coeffs, &numBq, &hasFO, &foCoef)) {
+                                        ftype, topo, cx.slopeDbOct,
+                                        coeffs, &numBq, &hasFO, &foCoef)) {
+            { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+              if (df) { std::fprintf(df, "[config] precomputeCrossoverCoeffs FAIL: freq=%.1f sr=%u slope=%d slot=%u\n",
+                       cx.frequencyHz, (unsigned)cfg.sampleRate, cx.slopeDbOct, (unsigned)slot); std::fclose(df); } }
             return true; /* skip on failure — not fatal */
         }
 
@@ -804,6 +984,32 @@ bool ConfigLoader::load(const char* jsonPath, CmdLoadParams& outParams) {
     if (!packCrossover(cfg.crossoverTweeter, 1)) return false;
 
     outParams.payloadSize = static_cast<uint32_t>(ptr - outParams.payload);
+
+    /* Diagnostic log: summarize what was packed. */
+    { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+      if (df) {
+          std::fprintf(df, "[config] load OK: bands=%u drivers=%u sr=%u bs=%u payload=%u entries=%u\n",
+                       (unsigned)cfg.bandCount, (unsigned)cfg.driverCount,
+                       (unsigned)cfg.sampleRate, (unsigned)cfg.bufferSize,
+                       (unsigned)outParams.payloadSize,
+                       (unsigned)hdr->stageCount);
+          /* Log crossover state. */
+          std::fprintf(df, "[config] cxW: en=%d freq=%.1f slope=%d topo=%s\n",
+                       cfg.crossoverWoofer.enabled, cfg.crossoverWoofer.frequencyHz,
+                       cfg.crossoverWoofer.slopeDbOct, cfg.crossoverWoofer.topologyName);
+          std::fprintf(df, "[config] cxT: en=%d freq=%.1f slope=%d topo=%s\n",
+                       cfg.crossoverTweeter.enabled, cfg.crossoverTweeter.frequencyHz,
+                       cfg.crossoverTweeter.slopeDbOct, cfg.crossoverTweeter.topologyName);
+          /* Log per-band coefficients. */
+          for (uint32_t i = 0; i < cfg.bandCount; ++i) {
+              std::fprintf(df, "[config] band[%u]: ch=%u en=%d b=[%.6f %.6f %.6f] a=[%.6f %.6f]\n",
+                           (unsigned)i, (unsigned)cfg.bands[i].targetChannel, cfg.bands[i].enabled,
+                           cfg.bands[i].b0, cfg.bands[i].b1, cfg.bands[i].b2,
+                           cfg.bands[i].a1, cfg.bands[i].a2);
+          }
+          std::fclose(df);
+      }
+    }
     return true;
 }
 
@@ -895,18 +1101,21 @@ bool ConfigLoader::precomputeBiquadCoeffs(float cutoffHz, float sampleRate,
     float cosWc = std::cosf(wc);
     float sinWc = std::sinf(wc);
 
-    /* Convert gain from dB to linear. */
-    float A = std::expf(gainDb / 20.0f);
+    /* Convert gain from dB to linear amplitude. */
+    float A = std::powf(10.f, gainDb / 40.f);
 
-    float beta = sinWc / (2.0f * q);
+    float alpha = sinWc / (2.0f * q);
 
-    /* Peaking EQ coefficients. */
-    float a0 = 1.0f + beta;
-    float b0Coeff = (1.0f + A * beta);
+    /* Peaking EQ coefficients — RBJ Audio EQ Cookbook.
+     * b0 = 1 + α·A    a0 = 1 + α/A
+     * b1 = -2cos(ω₀)  a1 = -2cos(ω₀)
+     * b2 = 1 - α·A    a2 = 1 - α/A */
+    float a0 = 1.0f + alpha / A;
+    float b0Coeff = (1.0f + alpha * A);
     float b1Coeff = -2.0f * cosWc;
-    float b2Coeff = (1.0f - A * beta);
-    float a1Coeff = 2.0f * cosWc;
-    float a2Coeff = (1.0f - beta);
+    float b2Coeff = (1.0f - alpha * A);
+    float a1Coeff = -2.0f * cosWc;
+    float a2Coeff = (1.0f - alpha / A);
 
     /* Normalize by a0. */
     if (std::fabs(a0) < 1e-12f) return false;

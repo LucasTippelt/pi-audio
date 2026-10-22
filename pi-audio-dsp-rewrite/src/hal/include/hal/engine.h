@@ -11,6 +11,7 @@
 class DspCore;
 class GainStage;
 #include "stages/crossover_stage.h"
+#include "stages/eq_chain_stage.h"
 #include "stages/limiter_stage.h"
 #include "stages/trim_stage.h"
 class AudioHal;
@@ -63,6 +64,10 @@ public:
     CrossoverStage& crossoverTweeter() { return m_crossoverTweeter; }
     bool isCrossoverActive() const { return m_crossoverActive; }
 
+    /* EQ stage access. */
+    EqChainStage& eqWoofer() { return m_eqWoofer; }
+    EqChainStage& eqTweeter() { return m_eqTweeter; }
+
     /* Limiter stage access. */
     LimiterStage& limiterWoofer() { return m_limiterWoofer; }
     LimiterStage& limiterTweeter() { return m_limiterTweeter; }
@@ -86,6 +91,10 @@ private:
     CrossoverStage m_crossoverWoofer;
     CrossoverStage m_crossoverTweeter;
     bool m_crossoverActive = false;
+
+    /* EQ stages — one per output chain, before crossover in the DSP chain. */
+    EqChainStage m_eqWoofer;
+    EqChainStage m_eqTweeter;
 
     /* Limiter stages — one per output chain, after crossover in the DSP chain. */
     LimiterStage m_limiterWoofer;

@@ -497,6 +497,9 @@ int main(int argc, char* argv[]) {
             struct stat st;
             if (stat("/run/pi-audio/reload", &st) != 0) continue;
 
+            { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+              if (df) { std::fprintf(df, "[reload] trigger detected\n"); std::fclose(df); } }
+
             /* Read config file for device names and DSP params. */
             char newCapture[128];
             char newPlayback[128];
@@ -527,7 +530,14 @@ int main(int argc, char* argv[]) {
                             ConfigLoader loader;
                             CmdLoadParams params;
                             if (loader.load(configFile, params)) {
-                                cmdQueue.push(params);
+                                bool pushed = cmdQueue.push(params);
+                                { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+                                  if (df) { std::fprintf(df, "[reload] params pushed=%d payloadSize=%u\n",
+                                               (int)pushed, (unsigned)params.payloadSize); std::fclose(df); } }
+                            } else {
+                                { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+                                  if (df) { std::fprintf(df, "[reload] load FAIL err=%u\n",
+                                               (unsigned)loader.getLastError()); std::fclose(df); } }
                             }
                         }
 
@@ -536,6 +546,17 @@ int main(int argc, char* argv[]) {
                             FullConfig cfg;
                             if (ConfigLoader::parseFullConfig(buf, static_cast<size_t>(sz), cfg)) {
                                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+                                { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+                                  if (df) {
+                                      std::fprintf(df, "[reload] parseFullConfig OK: bands=%u cxW=%.1fHz cxT=%.1fHz limEn=%d\n",
+                                                   (unsigned)cfg.bandCount,
+                                                   cfg.crossoverWoofer.frequencyHz,
+                                                   cfg.crossoverTweeter.frequencyHz,
+                                                   cfg.limiterEnabled ? 1 : 0);
+                                      std::fclose(df);
+                                  }
+                                }
 
                                 AppliedCrossover cxW = {
                                     cfg.crossoverWoofer.frequencyHz,

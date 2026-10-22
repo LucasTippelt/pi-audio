@@ -8,12 +8,17 @@
 #include "msg/queue.h"
 #include "stages/gain_stage.h"
 #include "stages/crossover_stage.h"
+#include "stages/eq_chain_stage.h"
 #include "stages/trim_stage.h"
 
 #include <cstdio>
 #include <cstring>
 
 Engine::Engine() : m_core(new DspCore()) {
+    /* Register EQ stages at start of each output chain (before crossover). */
+    core().stageChain(0).addPending(&m_eqWoofer);
+    core().stageChain(1).addPending(&m_eqTweeter);
+
     /* P4: Register crossover stages in output chains. */
     core().stageChain(0).addPending(&m_crossoverWoofer);
     core().stageChain(1).addPending(&m_crossoverTweeter);
@@ -68,6 +73,10 @@ void Engine::drainCommands() {
             static_cast<CmdQueue<CmdLoadParams, 16>*>(m_cmdQueue);
         CmdLoadParams cmds[16];
         size_t n = q->pop(cmds, 16);
+        if (n > 0) {
+            { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+              if (df) { std::fprintf(df, "[dsp] drainCommands: popped %zu CmdLoadParams\n", n); std::fclose(df); } }
+        }
         for (size_t i = 0; i < n; ++i) {
             if (cmds[i].header.type == CMD_LOAD_PARAMS && cmds[i].payloadSize > 0) {
                 applyCrossoverParams(cmds[i].payload, cmds[i].payloadSize);
@@ -84,10 +93,8 @@ void Engine::drainCommands() {
         for (size_t i = 0; i < n; ++i) {
             if (cmds[i].header.type == CMD_SET_TEST_MODE) {
                 m_testMode.store(cmds[i].mode, std::memory_order_release);
-#ifdef PI_AUDIO_DIAG_LOG
                 { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
-                  if (df) { std::fprintf(df, "[ctrl] CMD_SET_TEST_MODE mode=%u\n", cmds[i].mode); std::fclose(df); } }
-#endif
+                  if (df) { std::fprintf(df, "[dsp] testMode=%u\n", (unsigned)cmds[i].mode); std::fclose(df); } }
             }
         }
     }
@@ -103,18 +110,14 @@ void Engine::drainCommands() {
                 case CMD_SET_GAIN:
                     if (m_tweeterGain) m_tweeterGain->setGain(cmds[i].gain);
                     if (m_wooferGain)  m_wooferGain->setGain(cmds[i].gain);
-#ifdef PI_AUDIO_DIAG_LOG
                     { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
-                      if (df) { std::fprintf(df, "[ctrl] CMD_SET_GAIN gain=%.4f\n", cmds[i].gain); std::fclose(df); } }
-#endif
+                      if (df) { std::fprintf(df, "[dsp] gain=%.4f\n", cmds[i].gain); std::fclose(df); } }
                     break;
                 case CMD_SET_MUTE:
                     if (m_tweeterGain) m_tweeterGain->setMute(cmds[i].muted != 0);
                     if (m_wooferGain)  m_wooferGain->setMute(cmds[i].muted != 0);
-#ifdef PI_AUDIO_DIAG_LOG
                     { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
-                      if (df) { std::fprintf(df, "[ctrl] CMD_SET_MUTE muted=%u\n", cmds[i].muted); std::fclose(df); } }
-#endif
+                      if (df) { std::fprintf(df, "[dsp] muted=%u\n", (unsigned)cmds[i].muted); std::fclose(df); } }
                     break;
                 default:
                     break;
@@ -131,6 +134,21 @@ void Engine::applyCrossoverParams(const uint8_t* data, uint32_t len) {
     const uint8_t* entries = data + sizeof(ParamBlockHeader);
     uint32_t remaining = static_cast<uint32_t>(len - sizeof(ParamBlockHeader));
 
+    /* Diagnostic: log entry header. */
+    { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+      if (df) { std::fprintf(df, "[dsp] applyCrossoverParams: hdr.version=%u hdr.stageCount=%u len=%u\n",
+               (unsigned)hdr->version, (unsigned)hdr->stageCount, (unsigned)len); std::fclose(df); } }
+
+    /* Accumulate IIR EQ coefficients per chain. */
+    float iirCoeffs[2][EqChainStage::kMaxBands * 5];
+    bool iirEnabled[2][EqChainStage::kMaxBands];
+    uint32_t iirBandCount[2] = {0, 0};
+
+    /* Counters for diagnostic logging. */
+    uint32_t cxWooferApplied = 0;
+    uint32_t cXTweeterApplied = 0;
+    bool limiterDisabled = false;
+
     for (uint32_t i = 0; i < hdr->stageCount && remaining >= 8; ++i) {
         /* Parse compact entry: type(2) + stageSlot(2) + dataLen(4) + data[dataLen] */
         uint16_t type, slot;
@@ -142,11 +160,29 @@ void Engine::applyCrossoverParams(const uint8_t* data, uint32_t len) {
         if (entries + dataLen > data + len) break;
         remaining -= 8 + dataLen;
 
+        if (type == STAGE_PARAM_IIR_COEF && dataLen >= 21) {
+            /* EQ band: 5 floats (coeffs) + 1 byte (enabled). */
+            uint8_t s = slot < 2 ? slot : 0;
+            if (iirBandCount[s] < EqChainStage::kMaxBands) {
+                std::memcpy(&iirCoeffs[s][iirBandCount[s] * 5], entries, 20);
+                iirEnabled[s][iirBandCount[s]] = (entries[20] != 0);
+                { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+                  if (df) { float b0=0,b1=0,b2=0,a1=0,a2=0;
+                    std::memcpy(&b0, entries, 4); std::memcpy(&b1, entries+4, 4);
+                    std::memcpy(&b2, entries+8, 4); std::memcpy(&a1, entries+12, 4);
+                    std::memcpy(&a2, entries+16, 4);
+                    std::fprintf(df, "[dsp]   IIR band[%u] ch=%u en=%d b=[%.6f %.6f %.6f] a=[%.6f %.6f]\n",
+                                 (unsigned)iirBandCount[s], (unsigned)s, entries[20],
+                                 b0, b1, b2, a1, a2); std::fclose(df); } }
+                iirBandCount[s]++;
+            }
+        }
+
         if (type == STAGE_PARAM_CROSSOVER) {
             if (dataLen == 0) {
                 /* Zero-length entry: disable crossover (pass-through mode). */
-                if (slot == 0) m_crossoverWoofer.disable();
-                else if (slot == 1) m_crossoverTweeter.disable();
+                if (slot == 0) { m_crossoverWoofer.disable(); cxWooferApplied++; }
+                else if (slot == 1) { m_crossoverTweeter.disable(); cXTweeterApplied++; }
             } else if (dataLen >= 5) {
                 /* P4: Crossover coefficient block.
                  * Layout: filterType(1) + topology(1) + numBiquads(1) + hasFirstOrder(1) + padding(1)
@@ -165,11 +201,13 @@ void Engine::applyCrossoverParams(const uint8_t* data, uint32_t len) {
                     /* Woofer chain — lowpass. */
                     m_crossoverWoofer.configure(biquadCoeffs, actualBiquads,
                                                 hasFirstOrder != 0, firstOrderCoef);
+                    cxWooferApplied++;
                     m_crossoverActive = true;
                 } else if (slot == 1) {
                     /* Tweeter chain — highpass. */
                     m_crossoverTweeter.configure(biquadCoeffs, actualBiquads,
                                                  hasFirstOrder != 0, firstOrderCoef);
+                    cXTweeterApplied++;
                     m_crossoverActive = true;
                 }
             }
@@ -187,6 +225,7 @@ void Engine::applyCrossoverParams(const uint8_t* data, uint32_t len) {
             if (thresholdDb >= 999.f) {
                 m_limiterWoofer.disable();
                 m_limiterTweeter.disable();
+                limiterDisabled = true;
             } else {
                 uint32_t sr = core().getSampleRate();
                 if (sr > 0) {
@@ -210,6 +249,25 @@ void Engine::applyCrossoverParams(const uint8_t* data, uint32_t len) {
         }
 
         entries += dataLen;
+    }
+
+    /* Configure EQ stages with accumulated coefficients. */
+    if (iirBandCount[0] > 0) {
+        m_eqWoofer.configure(iirCoeffs[0], iirBandCount[0], iirEnabled[0]);
+    }
+    if (iirBandCount[1] > 0) {
+        m_eqTweeter.configure(iirCoeffs[1], iirBandCount[1], iirEnabled[1]);
+    }
+
+    /* Diagnostic summary. */
+    { FILE* df = std::fopen("/run/pi-audio/diag.log", "a");
+      if (df) {
+          std::fprintf(df, "[dsp]   SUMMARY: eqWoofer=%uBands eqTweeter=%uBands cxW=%ucx cXT=%ucx limDisabled=%d\n",
+                       (unsigned)iirBandCount[0], (unsigned)iirBandCount[1],
+                       (unsigned)cxWooferApplied, (unsigned)cXTweeterApplied,
+                       limiterDisabled ? 1 : 0);
+          std::fclose(df);
+      }
     }
 }
 

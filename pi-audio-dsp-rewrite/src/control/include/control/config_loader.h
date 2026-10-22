@@ -41,6 +41,7 @@ struct FullConfig {
         float b0, b1, b2; /* numerator                              */
         float a1, a2;     /* denominator (normalized by a0)         */
         uint32_t targetChannel;
+        uint8_t enabled;  /* 1=active, 0=bypass (pass-through)      */
     };
     static constexpr uint32_t kMaxBands = 16;
     BandCoeffs bands[kMaxBands];

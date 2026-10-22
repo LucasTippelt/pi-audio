@@ -41,6 +41,7 @@ add_library(dsp_core STATIC
     src/core/src/stages/gain_stage.cpp
     src/core/src/stages/biquad_stage.cpp
     src/core/src/stages/crossover_stage.cpp
+    src/core/src/stages/eq_chain_stage.cpp
     src/core/src/stages/trim_stage.cpp
     src/core/src/stages/delay_stage.cpp
     src/core/src/stages/limiter_stage.cpp
@@ -247,6 +248,18 @@ add_executable(test_limiter tests/test_limiter.cpp)
 target_include_directories(test_limiter PRIVATE ${REWRITE_CORE_INC} ${REWRITE_CORE_SRC} ${REWRITE_MSG_INC})
 target_link_libraries(test_limiter PRIVATE dsp_core msg_lib pthread m)
 add_test(NAME test_limiter COMMAND test_limiter)
+
+# EqChainStage tests (cascaded peaking EQ biquad chain)
+add_executable(test_eq_chain tests/test_eq_chain.cpp)
+target_include_directories(test_eq_chain PRIVATE ${REWRITE_CORE_INC} ${REWRITE_CORE_SRC} ${REWRITE_MSG_INC} ${REWRITE_CTRL_INC})
+target_link_libraries(test_eq_chain PRIVATE dsp_core control_plane msg_lib pthread m)
+add_test(NAME test_eq_chain COMMAND test_eq_chain)
+
+# ConfigLoader EQ parsing tests (WebUI bands schema)
+add_executable(test_config_loader_eq tests/test_config_loader_eq.cpp)
+target_include_directories(test_config_loader_eq PRIVATE ${REWRITE_CTRL_INC} ${REWRITE_MSG_INC})
+target_link_libraries(test_config_loader_eq PRIVATE control_plane msg_lib pthread m)
+add_test(NAME test_config_loader_eq COMMAND test_config_loader_eq)
 
 # ------------------------------------------------------------------ #
 #  Install                                                            #
