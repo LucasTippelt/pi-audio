@@ -75,6 +75,30 @@ async function writeTestStop(): Promise<IpcWriteResult> {
 const kPcmNameRe = /^[A-Za-z0-9_.:,-=]+$/;
 const pcmCache = { inputs: '', outputs: '' };
 
+/* Fallback: build PCM device names from /proc/asound/devices when arecord/aplay are unavailable. */
+async function listPcmDevicesFromProc(direction: 'capture' | 'playback'): Promise<string[]> {
+  try {
+    const data = await fs.promises.readFile('/proc/asound/devices', 'utf8');
+    const devices: string[] = ['default'];
+    /* Each line: "  N: [ card- dev]: digital audio playback|capture" */
+    for (const raw of data.split('\n')) {
+      const m = raw.match(/^\s*\d+:\s+\[\s*(\d+)\s*-\s*(\d+)\]\s*:/);
+      if (!m) continue;
+      const card = m[1];
+      const dev = m[2];
+      if (raw.includes(direction)) {
+        const hwName = `hw:${card},${dev}`;
+        const plugName = `plughw:${card},${dev}`;
+        if (!devices.includes(hwName)) devices.push(hwName);
+        if (!devices.includes(plugName)) devices.push(plugName);
+      }
+    }
+    return devices;
+  } catch {
+    return ['default'];
+  }
+}
+
 async function listPcmDevices(utility: 'arecord' | 'aplay'): Promise<string[]> {
   const key = utility === 'arecord' ? 'inputs' : 'outputs';
   try {
@@ -90,7 +114,9 @@ async function listPcmDevices(utility: 'arecord' | 'aplay'): Promise<string[]> {
     pcmCache[key] = stdout;
     return devices;
   } catch {
-    return ['default'];
+    /* arecord/aplay unavailable — fall back to /proc/asound/devices */
+    const direction = utility === 'arecord' ? 'capture' : 'playback';
+    return listPcmDevicesFromProc(direction);
   }
 }
 
